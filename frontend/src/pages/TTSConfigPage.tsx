@@ -20,6 +20,8 @@ import {
 import { ExperimentOutlined, PlayCircleOutlined, SaveOutlined } from '@ant-design/icons'
 import { ASRConfig, TTSConfig, VoiceCharacter } from '@/types'
 import { asrApi, ttsApi } from '@/services/api'
+import { ttsConfigProxy, asrConfigProxy } from '@/services/configProxy'
+import { useAuth } from '../contexts/AuthContext'
 
 const { Option } = Select
 const { Title, Text } = Typography
@@ -106,7 +108,7 @@ const TTSConfigPage: React.FC = () => {
   const loadTTSConfig = async () => {
     try {
       setTtsLoading(true)
-      const config = await ttsApi.getTTSConfig()
+      const config = await ttsConfigProxy.getConfig()
       ttsForm.setFieldsValue(config)
     } catch (error) {
       message.error('加载 TTS 配置失败')
@@ -118,7 +120,7 @@ const TTSConfigPage: React.FC = () => {
   const loadASRConfig = async () => {
     try {
       setAsrLoading(true)
-      const config = await asrApi.getASRConfig()
+      const config = await asrConfigProxy.getConfig()
       asrForm.setFieldsValue({
         ...config,
         provider: config?.provider || 'siliconflow',
@@ -167,7 +169,7 @@ const TTSConfigPage: React.FC = () => {
           return
         }
       }
-      await ttsApi.updateTTSConfig(values)
+      await ttsConfigProxy.updateConfig(values)
       message.success('TTS 配置已保存')
     } catch (error) {
       message.error('保存 TTS 配置失败')
@@ -281,7 +283,7 @@ const TTSConfigPage: React.FC = () => {
         }
       }
 
-      await asrApi.updateASRConfig(values)
+      await asrConfigProxy.updateConfig(values)
       message.success('ASR 配置已保存')
     } catch (error) {
       message.error('保存 ASR 配置失败')

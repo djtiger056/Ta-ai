@@ -187,9 +187,74 @@ async def delete_user(user_key: str):
     """删除用户"""
     user = await _resolve_user(user_key)
     
+    # 同时删除用户数据文件
+    from backend.user import user_data_manager
+    user_data_manager.delete_user_data(user.id)
+    
     success = await user_manager.delete_user(user.id)
     if not success:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="删除用户失败")
     
     return {"message": f"用户 {user.username} 已删除", "user_id": user.id}
+
+
+class AdminSetUserAdminRequest(BaseModel):
+    is_admin: int = Field(..., description="是否为管理员：1=是，0=否")
+
+
+@router.post("/users/{user_key}/admin", dependencies=[Depends(require_admin)])
+async def set_user_admin(user_key: str, request: AdminSetUserAdminRequest):
+    """设置用户的管理员状态"""
+    user = await _resolve_user(user_key)
+    
+    # 更新用户的管理员状态
+    from sqlalchemy import update
+    from backend.user.models import User
+    
+    async with user_manager.get_session() as session:
+        stmt = update(User).where(User.id == user.id).values(is_admin=request.is_admin)
+        await session.execute(stmt)
+        await session.commit()
+    
+    return {
+        "message": f"用户 {user.username} 的管理员状态已更新",
+        "user_id": user.id,
+        "is_admin": request.is_admin
+    }
+
+
+class AdminSetUserActiveRequest(BaseModel):
+    is_active: int = Field(..., description="是否启用：1=启用，0=禁用")
+
+
+@router.post("/users/{user_key}/active", dependencies=[Depends(require_admin)])
+async def set_user_active(user_key: str, request: AdminSetUserActiveRequest):
+    """设置用户的启用状态"""
+    user = await _resolve_user(user_key)
+    
+    success = await user_manager.update_user(user.id, is_active=request.is_active)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="更新用户状态失败")
+    
+    return {
+        "message": f"用户 {user.username} 的状态已更新",
+        "user_id": user.id,
+        "is_active": request.is_active
+    }
+
+
+@router.get("/users/{user_key}/storage", dependencies=[Depends(require_admin)])
+async def get_user_storage_stats(user_key: str):
+    """获取用户存储统计信息"""
+    user = await _resolve_user(user_key)
+    
+    from backend.user import user_data_manager
+    stats = user_data_manager.get_user_storage_stats(user.id)
+    
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "storage": stats
+    }
+
 

@@ -12,11 +12,15 @@ import {
   Select,
   Divider,
   Row,
-  Col
+  Col,
+  Alert,
+  Tag,
 } from 'antd'
-import { SaveOutlined, ExperimentOutlined } from '@ant-design/icons'
+import { SaveOutlined, ExperimentOutlined, CrownOutlined } from '@ant-design/icons'
 import { SystemConfig } from '@/types'
 import { configApi } from '@/services/api'
+import { systemConfigProxy } from '@/services/configProxy'
+import { useAuth } from '../contexts/AuthContext'
 
 const { Option } = Select
 const { TextArea } = Input
@@ -27,6 +31,7 @@ const SettingsPage: React.FC = () => {
   const [testing, setTesting] = useState(false)
   const [config, setConfig] = useState<SystemConfig | null>(null)
   const currentProvider = Form.useWatch(['llm', 'provider'], form)
+  const { isAdmin } = useAuth()
 
   useEffect(() => {
     loadConfig()
@@ -35,38 +40,13 @@ const SettingsPage: React.FC = () => {
   const loadConfig = async () => {
     try {
       console.log('正在加载配置...')
-      const data = await configApi.getConfig()
+      const data = await systemConfigProxy.getConfig()
       console.log('配置加载成功:', data)
       setConfig(data)
       form.setFieldsValue(data)
     } catch (error) {
       console.error('加载配置失败:', error)
       message.error('加载配置失败，请检查后端服务是否启动')
-      
-      // 设置默认值，避免页面空白
-      const defaultConfig = {
-        llm: {
-          provider: 'yunwu',
-          model: 'selected_model_name',
-          api_base: 'https://yunwu.ai/v1',
-          api_key: '',
-          temperature: 0.7,
-          max_tokens: 1000
-        },
-        adapters: {
-          console: { enabled: false },
-          qq: { 
-            enabled: true, 
-            ws_host: '127.0.0.1', 
-            ws_port: 3001, 
-            access_token: '', 
-            need_at: true 
-          }
-        },
-        system_prompt: '你是一个友好的AI助手，能够与用户进行自然对话。请用简洁、友好的方式回答用户的问题。'
-      }
-      setConfig(defaultConfig)
-      form.setFieldsValue(defaultConfig)
     }
   }
 
@@ -74,18 +54,16 @@ const SettingsPage: React.FC = () => {
     try {
       setLoading(true)
       const formValues = form.getFieldsValue()
-      console.log('Form values:', formValues)
       
-      // 合并当前配置和表单值，确保完整的数据结构
+      // 合并当前配置和表单值
       const currentConfig = (config || {}) as any
       const values = {
         llm: { ...currentConfig.llm, ...formValues.llm },
         adapters: { ...currentConfig.adapters, ...formValues.adapters },
         system_prompt: formValues.system_prompt || currentConfig.system_prompt
       }
-      console.log('Merged values to send:', values)
       
-      await configApi.updateConfig(values)
+      await systemConfigProxy.updateConfig(values)
       message.success('配置保存成功')
       setConfig(values)
     } catch (error) {
@@ -133,7 +111,16 @@ const SettingsPage: React.FC = () => {
 
   return (
     <div>
-      <Card title="系统设置" extra={
+      <Card title={
+        <Space>
+          <span>系统设置</span>
+          {isAdmin ? (
+            <Tag color="orange" icon={<CrownOutlined />}>管理员模式 - 修改将影响所有用户的默认配置</Tag>
+          ) : (
+            <Tag color="blue">个人模式 - 修改仅影响你自己</Tag>
+          )}
+        </Space>
+      } extra={
         <Space>
           <Button 
             icon={<ExperimentOutlined />} 

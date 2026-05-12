@@ -11,12 +11,61 @@ import {
   EmoteConfig,
   EmoteConfigResponse,
   EmoteCategoryInfo,
+  CerebellumState,
+  CerebellumMotivation,
+  CerebellumHistoryItem,
+  DailyScheduleGenConfig,
+  GeneratedScheduleStatus,
+  GeneratedScheduleData,
 } from '@/types'
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 10000,
 })
+
+// 请求拦截器：自动添加 Token
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token')
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`
+    }
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
+// 响应拦截器：处理 401 错误
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token 过期或无效，清除本地存储并跳转登录页
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+      // 如果不在登录页，则跳转
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login'
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+// 获取当前用户ID的辅助函数
+const getCurrentUserId = (): string => {
+  try {
+    const userStr = localStorage.getItem('user')
+    if (userStr) {
+      const user = JSON.parse(userStr)
+      return String(user.id)
+    }
+  } catch (e) {
+    console.error('获取用户ID失败:', e)
+  }
+  return 'web_user'
+}
 
 export const configApi = {
   // 获取系统配置
@@ -71,21 +120,23 @@ export const chatApi = {
   sendMessage: async (message: string, userId?: string): Promise<string> => {
     const response = await api.post('/chat', {
       message,
-      user_id: userId || 'web_user'
+      user_id: userId || getCurrentUserId()
     })
     return response.data.response
   },
 
   // 流式聊天
   streamChat: async (message: string, userId?: string) => {
+    const token = localStorage.getItem('token')
     const response = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
         message,
-        user_id: userId || 'web_user'
+        user_id: userId || getCurrentUserId()
       }),
     })
     
@@ -654,6 +705,39 @@ export const dailyHabitsApi = {
   },
 }
 
+export const dailyScheduleApi = {
+  getStatus: async (): Promise<GeneratedScheduleStatus> => {
+    const response = await api.get('/daily-schedule/status')
+    return response.data
+  },
+  getToday: async (): Promise<GeneratedScheduleData> => {
+    const response = await api.get('/daily-schedule/today')
+    return response.data
+  },
+  generate: async (force = false): Promise<{ success: boolean; message: string; slot_count: number; generated_at: string | null }> => {
+    const response = await api.post('/daily-schedule/generate', { force })
+    return response.data
+  },
+  getConfig: async (): Promise<DailyScheduleGenConfig> => {
+    const response = await api.get('/config')
+    const raw = response.data?.daily_schedule_generation || {}
+    return {
+      enabled: raw.enabled ?? true,
+      generate_window_start: raw.generate_window_start ?? '00:00',
+      generate_window_end: raw.generate_window_end ?? '06:00',
+      persona_name: raw.persona_name ?? '',
+      persona_desc: raw.persona_desc ?? '',
+      prompt_template: raw.prompt_template ?? '',
+      timezone: raw.timezone ?? '',
+      llm: raw.llm ?? null,
+    }
+  },
+  saveConfig: async (cfg: DailyScheduleGenConfig): Promise<void> => {
+    // 通过全局 config 接口保存 daily_schedule_generation 节
+    await api.post('/config', { daily_schedule_generation: cfg })
+  },
+}
+
 export const reminderApi = {
   getConfig: async (): Promise<any> => {
     const response = await api.get('/reminder/config')
@@ -687,6 +771,149 @@ export const reminderApi = {
   getPendingReminders: async (): Promise<any> => {
     const response = await api.get('/reminder/pending')
     return response.data
+  },
+}
+
+export const cerebellumApi = {
+  getState: async (): Promise<{
+    enabled: boolean
+    running: boolean
+    state: CerebellumState
+    config: any
+    motivation_count: number
+  }> => {
+    const response = await api.get('/cerebellum/state')
+    return response.data
+  },
+  getMotivations: async (): Promise<CerebellumMotivation[]> => {
+    const response = await api.get('/cerebellum/motivation')
+    return response.data.motivations || []
+  },
+  getHistory: async (hours = 24, limit = 500): Promise<CerebellumHistoryItem[]> => {
+    const response = await api.get('/cerebellum/history', { params: { hours, limit } })
+    return response.data.history || []
+  },
+  getConfig: async (): Promise<any> => {
+    const response = await api.get('/cerebellum/config')
+    return response.data.config
+  },
+  updateConfig: async (config: any): Promise<any> => {
+    const response = await api.post('/cerebellum/config', config)
+    return response.data
+  },
+  submitStimulus: async (payload: any): Promise<any> => {
+    const response = await api.post('/cerebellum/stimulus', payload)
+    return response.data
+  },
+}
+
+// 用户配置 API（用户个人配置，与全局配置分离）
+export interface UserConfig {
+  system_prompt?: string
+  llm?: Record<string, any>
+  tts?: Record<string, any>
+  image_generation?: Record<string, any>
+  vision?: Record<string, any>
+  prompt_enhancer?: Record<string, any>
+  emotes?: Record<string, any>
+  proactive_chat?: Record<string, any>
+  preferences?: Record<string, any>
+}
+
+export const userConfigApi = {
+  // 获取当前用户的配置
+  getConfig: async (): Promise<UserConfig> => {
+    const response = await api.get('/user/config')
+    return response.data
+  },
+
+  // 更新当前用户的配置
+  updateConfig: async (config: Partial<UserConfig>): Promise<UserConfig> => {
+    const response = await api.put('/user/config', config)
+    return response.data
+  },
+
+  // 重置用户配置（恢复使用全局默认配置）
+  resetConfig: async (configType?: string): Promise<void> => {
+    const params = configType ? { config_type: configType } : {}
+    await api.delete('/user/config', { params })
+  },
+
+  // 获取用户完整信息（包括配置）
+  getProfile: async (): Promise<any> => {
+    const response = await api.get('/user/profile')
+    return response.data
+  },
+}
+
+// 用户认证 API
+export const authApi = {
+  // 登录
+  login: async (username: string, password: string): Promise<{ access_token: string; user: any }> => {
+    const response = await api.post('/auth/login', { username, password })
+    return response.data
+  },
+
+  // 注册
+  register: async (data: {
+    username: string
+    password: string
+    nickname?: string
+    qq_user_id?: string
+  }): Promise<any> => {
+    const response = await api.post('/auth/register', data)
+    return response.data
+  },
+
+  // 获取当前用户信息
+  getCurrentUser: async (): Promise<any> => {
+    const response = await api.get('/auth/me')
+    return response.data
+  },
+
+  // 修改密码
+  changePassword: async (oldPassword: string, newPassword: string): Promise<void> => {
+    await api.post('/auth/change-password', {
+      old_password: oldPassword,
+      new_password: newPassword,
+    })
+  },
+}
+
+// 管理员 API
+export const adminApi = {
+  // 获取所有用户列表
+  getUsers: async (): Promise<any[]> => {
+    const response = await api.get('/admin/users')
+    return response.data.users
+  },
+
+  // 获取指定用户的配置
+  getUserConfig: async (userKey: string): Promise<any> => {
+    const response = await api.get(`/admin/users/${userKey}/config`)
+    return response.data
+  },
+
+  // 更新指定用户的配置
+  updateUserConfig: async (userKey: string, config: any): Promise<any> => {
+    const response = await api.put(`/admin/users/${userKey}/config`, config)
+    return response.data
+  },
+
+  // 创建/更新 QQ 用户
+  upsertQQUser: async (data: { qq_user_id: string; nickname?: string; avatar?: string }): Promise<any> => {
+    const response = await api.post('/admin/users/qq', data)
+    return response.data
+  },
+
+  // 删除用户
+  deleteUser: async (userId: number): Promise<void> => {
+    await api.delete(`/admin/users/${userId}`)
+  },
+
+  // 设置用户管理员状态
+  setUserAdmin: async (userId: number, isAdmin: boolean): Promise<void> => {
+    await api.post(`/admin/users/${userId}/admin`, { is_admin: isAdmin ? 1 : 0 })
   },
 }
 

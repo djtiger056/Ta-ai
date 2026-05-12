@@ -264,3 +264,77 @@ export interface EmoteConfigResponse {
   categories: EmoteCategoryInfo[]
   base_path: string
 }
+
+export interface CerebellumState {
+  intensities: Record<string, number>
+  baselines: Record<string, number>
+  dominant_emotion: string
+  dominant_emotion_label?: string
+  last_updated_at: string
+  last_tick_duration_ms: number
+  last_triggered_emotion?: string | null
+  last_triggered_emotion_label?: string | null
+}
+
+export interface CerebellumMotivation {
+  motivation_type: string
+  motivation_label: string
+  intensity: number
+  description: string
+  suggested_action: string
+  dominant_emotion: string
+  dominant_emotion_label: string
+  dominant_emotion_intensity: number
+  status: string
+  created_at?: string | null
+  target_key?: string | null
+}
+
+export interface CerebellumHistoryItem {
+  timestamp: string
+  intensities: Record<string, number>
+  dominant_emotion: string
+  motivation_types: string[]
+}
+
+// ---- 每日作息生成 ----
+
+export interface GeneratedScheduleSlot {
+  start: string
+  end: string
+  activity: string
+  desc: string
+}
+
+export interface GeneratedScheduleStatus {
+  generated: boolean
+  date: string | null
+  generated_at: string | null
+  slot_count: number
+  config_enabled: boolean
+}
+
+export interface GeneratedScheduleData {
+  date: string
+  generated_at: string
+  slots: GeneratedScheduleSlot[]
+}
+
+export interface DailyScheduleGenConfig {
+  enabled: boolean
+  generate_window_start: string
+  generate_window_end: string
+  persona_name: string
+  persona_desc: string
+  prompt_template: string
+  timezone?: string
+  llm?: {
+    provider?: string
+    api_base?: string
+    api_key?: string
+    model?: string
+    temperature?: number
+    max_tokens?: number
+  } | null
+}
+

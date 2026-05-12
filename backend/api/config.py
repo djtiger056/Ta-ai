@@ -16,6 +16,7 @@ class ConfigRequest(BaseModel):
     llm: Optional[Dict[str, Any]] = Field(None, description="LLM配置")
     adapters: Optional[Dict[str, Any]] = Field(None, description="适配器配置")
     system_prompt: Optional[str] = Field(None, description="系统提示词")
+    daily_schedule_generation: Optional[Dict[str, Any]] = Field(None, description="每日作息生成配置")
 
 @router.get("/config")
 async def get_config():

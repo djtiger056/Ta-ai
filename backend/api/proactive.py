@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from ..config import config
 from ..core.proactive import ProactiveChatScheduler
+from . import cerebellum as cerebellum_api
 
 router = APIRouter(prefix="/api", tags=["proactive"])
 
@@ -35,9 +36,11 @@ class ProactiveTriggerRequest(BaseModel):
 def record_user_activity(channel: str, user_id: str, session_id: Optional[str], message: Optional[str]):
     scheduler = scheduler_instance
     if not scheduler:
+        cerebellum_api.record_user_message_stimulus(channel, user_id, session_id, message)
         return
     try:
         scheduler.record_user_activity(channel, user_id, session_id, message)
+        cerebellum_api.record_user_message_stimulus(channel, user_id, session_id, message)
     except Exception as e:
         print(f"[Proactive] 记录用户活跃失败: {e}")
 

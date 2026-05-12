@@ -19,6 +19,7 @@ import {
 } from 'antd';
 import { PictureOutlined, ExperimentOutlined } from '@ant-design/icons';
 import { imageGenApi } from '@/services/api';
+import { imageGenConfigProxy } from '@/services/configProxy';
 import { Link } from 'react-router-dom';
 
 const { Title, Text } = Typography;
@@ -124,7 +125,7 @@ const ImageGenPage: React.FC = () => {
   const loadConfig = async () => {
     try {
       setLoading(true);
-      const data = await imageGenApi.getImageGenConfig();
+      const data = await imageGenConfigProxy.getConfig();
       setConfig(data);
       form.setFieldsValue(data);
     } catch (error) {
@@ -137,7 +138,7 @@ const ImageGenPage: React.FC = () => {
   const saveConfig = async (values: ImageGenConfig) => {
     try {
       setLoading(true);
-      await imageGenApi.updateImageGenConfig(values);
+      await imageGenConfigProxy.updateConfig(values);
       message.success('配置保存成功');
       setConfig(values);
     } catch (error) {

@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None  # type: ignore
 
 from .manager import MCPPlugin
+from .schedule_generator import default_generated_path
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -182,6 +183,12 @@ class DailyHabitsPlugin(MCPPlugin):
         ]
 
     def _pick_schedule(self, cfg: Dict[str, Any], now: datetime) -> Tuple[str, List[Dict[str, Any]]]:
+        # 优先使用 LLM 生成的当日作息
+        generated_slots = self._load_generated_slots(now)
+        if generated_slots is not None:
+            return "generated", generated_slots
+
+        # fallback：静态配置
         schedules = cfg.get("schedules") or {}
         schedule_name = cfg.get("default_schedule") or "default"
 
@@ -192,6 +199,24 @@ class DailyHabitsPlugin(MCPPlugin):
             schedule_name = next(iter(schedules.keys()))
 
         return schedule_name, schedules.get(schedule_name, [])
+
+    def _load_generated_slots(self, now: datetime) -> Optional[List[Dict[str, Any]]]:
+        """读取今天 LLM 生成的作息槽位，若不存在或日期不符则返回 None。"""
+        gen_path = default_generated_path()
+        if not gen_path.exists():
+            return None
+        try:
+            data = json.loads(gen_path.read_text(encoding="utf-8"))
+            stored_date = data.get("date")
+            today_str = now.date().isoformat()
+            if stored_date != today_str:
+                return None
+            slots = data.get("slots")
+            if isinstance(slots, list) and slots:
+                return slots
+        except Exception:
+            pass
+        return None
 
     def _active_override(self, cfg: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
         override = cfg.get("override") or {}
@@ -261,9 +286,12 @@ class DailyHabitsPlugin(MCPPlugin):
             except Exception:
                 pass
 
-        prefix = "当前生活状态"
         if status.get("source") == "override":
             prefix = "当前临时状态"
+        elif status.get("schedule") == "generated":
+            prefix = "当前生活状态（今日作息）"
+        else:
+            prefix = "当前生活状态"
 
         main = f"{prefix}：现在是 {now.strftime('%H:%M')}，正在{activity}{window}。"
         if desc:

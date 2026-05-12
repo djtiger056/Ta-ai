@@ -20,6 +20,7 @@ import {
 } from 'antd';
 import { EyeOutlined, ExperimentOutlined, CameraOutlined } from '@ant-design/icons';
 import { visionApi } from '@/services/api';
+import { visionConfigProxy } from '@/services/configProxy';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -75,7 +76,7 @@ const VisionPage: React.FC = () => {
     try {
       setLoading(true);
       console.log('正在加载视觉识别配置...');
-      const data = await visionApi.getVisionConfig();
+      const data = await visionConfigProxy.getConfig();
       console.log('配置加载成功:', data);
       setConfig(data);
       form.setFieldsValue(data);
@@ -96,7 +97,7 @@ const VisionPage: React.FC = () => {
     try {
       setLoading(true);
       console.log('保存配置:', values);
-      await visionApi.updateVisionConfig(values);
+      await visionConfigProxy.updateConfig(values);
       message.success('配置保存成功');
       // 保存成功后重新加载配置，确保与后端同步
       await loadConfig();
