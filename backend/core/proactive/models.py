@@ -29,3 +29,4 @@ class ProactiveTargetState:
     activity: Dict[str, Any] = field(default_factory=dict)
     web_pending_messages: List[Dict[str, Any]] = field(default_factory=list)
     next_web_message_id: int = 1
+    pending_motivation: Optional[Dict[str, Any]] = None

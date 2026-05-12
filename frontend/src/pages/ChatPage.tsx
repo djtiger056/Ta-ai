@@ -6,10 +6,9 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 import { proactiveApi } from '@/services/api'
+import { useAuth } from '../contexts/AuthContext'
 
 const { TextArea } = Input
-const WEB_USER_ID = 'web_user'
-const WEB_SESSION_ID = 'web_user'
 const PROACTIVE_POLL_INTERVAL = 10000
 
 interface ChatEmote {
@@ -37,6 +36,11 @@ const ChatPage: React.FC = () => {
   const [streaming, setStreaming] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const seenProactiveIdsRef = useRef<Set<string>>(new Set())
+  
+  // 获取当前登录用户
+  const { user } = useAuth()
+  const userId = user ? String(user.id) : 'web_user'
+  const sessionId = userId
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -56,8 +60,8 @@ const ChatPage: React.FC = () => {
       try {
         const payloads = await proactiveApi.pollMessages({
           channel: 'web',
-          user_id: WEB_USER_ID,
-          session_id: WEB_SESSION_ID,
+          user_id: userId,
+          session_id: sessionId,
           limit: 20,
         })
 
@@ -93,7 +97,7 @@ const ChatPage: React.FC = () => {
       active = false
       window.clearInterval(timer)
     }
-  }, [streaming])
+  }, [streaming, userId, sessionId])
 
   const handleSend = async () => {
     if (!input.trim()) return
@@ -123,15 +127,17 @@ const ChatPage: React.FC = () => {
     setStreaming(true)
 
     try {
+      const token = localStorage.getItem('token')
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           message: input,
-          user_id: WEB_USER_ID,
-          session_id: WEB_SESSION_ID,
+          user_id: userId,
+          session_id: sessionId,
         }),
       })
       markClient('response_headers_received')
@@ -278,7 +284,8 @@ const ChatPage: React.FC = () => {
         type="info"
         showIcon
         style={{ marginBottom: 12 }}
-        message="本页会自动轮询并展示 AI 主动消息。若要让 Web 端收得到，请在“主动聊天”页配置 channel=`web`、user_id=`web_user`、session_id=`web_user`。"
+        message={`当前用户: ${user?.nickname || user?.username || "未登录"} (ID: ${userId})`}
+        description="聊天时将使用你的个人配置。如需修改配置，请前往「我的设置」页面。"
       />
       <div className="chat-messages" style={{ height: 'calc(100% - 120px)', overflowY: 'auto', padding: '16px' }}>
         {messages.map((msg) => (

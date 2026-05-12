@@ -184,3 +184,87 @@ async def bind_qq_account(token: str = Depends(get_access_token), qq_user_id: st
         )
     
     return {"message": "QQ账号绑定成功"}
+
+
+class ChangePasswordRequest(BaseModel):
+    """修改密码请求模型"""
+    old_password: str = Field(description="旧密码")
+    new_password: str = Field(description="新密码", min_length=6, max_length=100)
+
+
+@router.post("/auth/change-password")
+async def change_password(request: ChangePasswordRequest, token: str = Depends(get_access_token)):
+    """修改密码"""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
+    
+    user_info = auth_manager.get_user_from_token(token)
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的令牌"
+        )
+    
+    # 获取用户
+    user = await user_manager.get_user_by_id(user_info['user_id'])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+    
+    # 验证旧密码
+    if not auth_manager.verify_password(request.old_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="旧密码错误"
+        )
+    
+    # 更新密码
+    from sqlalchemy import update
+    from backend.user.models import User as UserModel
+    
+    async with user_manager.get_session() as session:
+        new_hash = auth_manager.hash_password(request.new_password)
+        stmt = update(UserModel).where(UserModel.id == user.id).values(password_hash=new_hash)
+        await session.execute(stmt)
+        await session.commit()
+    
+    return {"message": "密码修改成功"}
+
+
+class UpdateProfileRequest(BaseModel):
+    """更新个人信息请求模型"""
+    nickname: Optional[str] = Field(default=None, description="昵称")
+    avatar: Optional[str] = Field(default=None, description="头像URL")
+
+
+@router.put("/auth/profile", response_model=UserResponse)
+async def update_profile(request: UpdateProfileRequest, token: str = Depends(get_access_token)):
+    """更新个人信息"""
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
+    
+    user_info = auth_manager.get_user_from_token(token)
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的令牌"
+        )
+    
+    # 更新用户信息
+    success = await user_manager.update_user(
+        user_id=user_info['user_id'],
+        nickname=request.nickname,
+        avatar=request.avatar
+    )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="更新失败"
+        )
+    
+    # 返回更新后的用户信息
+    user = await user_manager.get_user_by_id(user_info['user_id'])
+    return UserResponse.model_validate(user)

@@ -32,6 +32,8 @@ from backend.api.prompt_enhancer import router as prompt_enhancer_router
 from backend.api.mcp import router as mcp_router
 from backend.api import proactive as proactive_api
 from backend.core.proactive import ProactiveChatScheduler
+from backend.api import cerebellum as cerebellum_api
+from backend.core.cerebellum import CerebellumEngine
 from backend.api.emotes import router as emotes_router
 from backend.api import reminder as reminder_api
 from backend.api.access_control import router as access_control_router
@@ -40,6 +42,7 @@ from backend.api.user_auth import router as user_auth_router
 from backend.api.user_config import router as user_config_router
 from backend.api.admin_users import router as admin_users_router
 from backend.api.voice_session import router as voice_session_router
+from backend.api.daily_schedule import router as daily_schedule_router
 from backend.user import user_manager
 
 # 创建 FastAPI 应用
@@ -79,6 +82,7 @@ app.include_router(vision_router)
 app.include_router(mcp_router)
 app.include_router(prompt_enhancer_router)
 app.include_router(proactive_api.router)
+app.include_router(cerebellum_api.router)
 app.include_router(emotes_router)
 app.include_router(reminder_api.router)
 app.include_router(access_control_router)
@@ -86,6 +90,7 @@ app.include_router(user_auth_router)
 app.include_router(user_config_router)
 app.include_router(admin_users_router)
 app.include_router(voice_session_router)
+app.include_router(daily_schedule_router)
 
 
 @app.get("/api/health")
@@ -138,6 +143,10 @@ async def start_adapters():
 
         # 初始化主动聊天调度器
         proactive_scheduler: Optional[ProactiveChatScheduler] = ProactiveChatScheduler(bot)
+        cerebellum_engine: Optional[CerebellumEngine] = CerebellumEngine(
+            proactive_dispatcher=proactive_scheduler.handle_motivation_signal if proactive_scheduler else None
+        )
+        cerebellum_api.set_engine(cerebellum_engine)
 
         # 初始化待办事项调度器
         reminder_scheduler: Optional[ReminderScheduler] = None
@@ -261,6 +270,12 @@ async def start_adapters():
             print("🤖 主动聊天调度器已启动")
             if proactive_scheduler.task:
                 tasks.append(proactive_scheduler.task)
+
+        if cerebellum_engine:
+            await cerebellum_engine.start()
+            print("🧠 小脑情感引擎已启动")
+            if cerebellum_engine.task:
+                tasks.append(cerebellum_engine.task)
 
         # 启动待办事项调度器
         if reminder_scheduler:

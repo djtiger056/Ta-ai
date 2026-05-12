@@ -17,6 +17,7 @@ from .behavior import (
 )
 from .message_builder import build_instruction as _build_instruction_impl
 from .web_queue import enqueue_message as _enqueue_message_impl, poll_messages as _poll_messages_impl
+from ..cerebellum.models import MotivationSignal
 
 
 class ProactiveChatScheduler:
@@ -176,6 +177,40 @@ class ProactiveChatScheduler:
         instruction = self._build_instruction(target, None, override_instruction=instruction_suffix)
         return await self._send_proactive_message(target, instruction)
 
+    async def handle_motivation_signal(self, signal: MotivationSignal) -> bool:
+        """接收小脑动机信号并尽快转化为主动消息。"""
+        if not self._config.get("enabled", False):
+            return False
+
+        targets: List[Dict[str, Any]] = self._config.get("targets", [])
+        if not targets:
+            return False
+
+        target = self._select_target_for_motivation(targets, signal)
+        if not target:
+            return False
+
+        state = self.target_state.setdefault(self._target_key(target), ProactiveTargetState())
+        now = self._now()
+
+        if not self._can_send_by_global_cooldown(state, now):
+            state.pending_motivation = signal.to_dict()
+            return False
+
+        instruction = self._build_instruction(
+            target,
+            None,
+            motivation_context=signal.to_dict(),
+        )
+        await self._send_proactive_message(
+            target,
+            instruction,
+            state=state,
+            respect_global_cooldown=True,
+        )
+        state.pending_motivation = None
+        return True
+
     async def _run_loop(self):
         while self.running:
             try:
@@ -197,9 +232,14 @@ class ProactiveChatScheduler:
         # 检查待办事项
         await self._check_and_trigger_reminders(now)
 
+        # 检查是否需要生成今日作息表
+        await self._check_and_generate_daily_schedule(now)
+
         for target in targets:
             key = self._target_key(target)
             state = self.target_state.setdefault(key, ProactiveTargetState())
+            if await self._consume_pending_motivation(target, state, now):
+                continue
             if await self._check_behavior_rules(target, state, now):
                 continue
             windows = self._resolve_time_windows(target)
@@ -296,6 +336,7 @@ class ProactiveChatScheduler:
         target: Dict[str, Any],
         window_cfg: Optional[Dict[str, Any]] = None,
         override_instruction: Optional[str] = None,
+        motivation_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         default_prompt = self._config.get(
             "default_prompt",
@@ -308,7 +349,43 @@ class ProactiveChatScheduler:
             override_instruction=override_instruction,
             default_prompt=default_prompt,
             global_templates=global_templates,
+            motivation_context=motivation_context,
         )
+
+    async def _consume_pending_motivation(
+        self,
+        target: Dict[str, Any],
+        state: ProactiveTargetState,
+        now: datetime,
+    ) -> bool:
+        pending = state.pending_motivation
+        if not pending:
+            return False
+        if not self._can_send_by_global_cooldown(state, now):
+            return False
+        instruction = self._build_instruction(target, None, motivation_context=pending)
+        await self._send_proactive_message(
+            target,
+            instruction,
+            state=state,
+            respect_global_cooldown=True,
+        )
+        state.pending_motivation = None
+        return True
+
+    def _select_target_for_motivation(
+        self,
+        targets: List[Dict[str, Any]],
+        signal: MotivationSignal,
+    ) -> Optional[Dict[str, Any]]:
+        if signal.target_key:
+            for target in targets:
+                if self._target_key(target) == signal.target_key:
+                    return target
+        for target in targets:
+            if target.get("channel") == "web":
+                return target
+        return targets[0] if targets else None
 
     async def _check_behavior_rules(
         self,
@@ -428,6 +505,9 @@ class ProactiveChatScheduler:
 
     def _resolve_time_windows(self, target: Dict[str, Any]) -> List[Dict[str, Any]]:
         """兼容多时间段配置，支持旧 daily_window 结构"""
+        cerebellum_cfg = config.get("cerebellum", {}) or {}
+        if cerebellum_cfg.get("enabled", False) and cerebellum_cfg.get("replace_time_windows", True):
+            return []
         if target.get("time_windows"):
             return target["time_windows"]
 
@@ -686,6 +766,56 @@ class ProactiveChatScheduler:
                 return target
         return None
 
+    async def _check_and_generate_daily_schedule(self, now: datetime):
+        """
+        在每天凌晨生成时间窗口内（默认 00:00-06:00），
+        若今天尚未生成作息表，则调用 LLM 生成。
+        """
+        try:
+            from backend.config import config as global_config
+            gen_cfg = global_config.get("daily_schedule_generation", {}) or {}
+        except Exception:
+            gen_cfg = {}
+
+        if not gen_cfg.get("enabled", True):
+            return
+
+        # 生成时间窗口（默认凌晨 0-6 点）
+        window_start_str = gen_cfg.get("generate_window_start", "00:00")
+        window_end_str = gen_cfg.get("generate_window_end", "06:00")
+        try:
+            from datetime import time as dtime
+            ws = dtime.fromisoformat(window_start_str)
+            we = dtime.fromisoformat(window_end_str)
+        except Exception:
+            ws = dtime(0, 0)
+            we = dtime(6, 0)
+
+        current_time = now.time().replace(second=0, microsecond=0)
+        in_window = ws <= current_time < we
+
+        if not in_window:
+            return
+
+        # 检查今天是否已生成
+        try:
+            from backend.mcp.schedule_generator import DailyScheduleGenerator
+            generator = DailyScheduleGenerator(
+                bot=self.bot,
+                timezone_name=gen_cfg.get("timezone") or self._config.get("timezone", "Asia/Shanghai"),
+            )
+            if generator.is_generated_today():
+                return
+
+            print("[ScheduleGen] 开始生成今日作息表…")
+            success = await generator.generate_for_today()
+            if success:
+                print("[ScheduleGen] 今日作息表生成完成。")
+            else:
+                print("[ScheduleGen] 今日作息表生成失败或已跳过。")
+        except Exception as exc:
+            print(f"[ScheduleGen] 生成作息表时出错: {exc}")
+
     def status_snapshot(self) -> Dict[str, Any]:
         return {
             "enabled": self._config.get("enabled", False),
@@ -698,6 +828,7 @@ class ProactiveChatScheduler:
                     "images_sent_today": state.images_sent_today,
                     "image_quota_date": state.image_quota_date.isoformat() if state.image_quota_date else None,
                     "pending_web_messages": len(state.web_pending_messages),
+                    "pending_motivation": state.pending_motivation,
                     "activity": {
                         "last_user_message_at": state.activity.get("last_user_message_at").isoformat() if state.activity.get("last_user_message_at") else None,
                         "last_assistant_message_at": state.activity.get("last_assistant_message_at").isoformat() if state.activity.get("last_assistant_message_at") else None,

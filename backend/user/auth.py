@@ -10,16 +10,19 @@ from backend.utils.datetime_utils import get_now
 class AuthManager:
     """认证管理器"""
 
-    @property
-    def SECRET_KEY(self) -> str:
-        return config.get('jwt_secret_key', 'your-secret-key-change-this-in-production')
-
     ALGORITHM = 'HS256'
     TOKEN_EXPIRE_HOURS = 24 * 7  # 7天过期
 
     @staticmethod
-    def hash_password(password: str) -> str:
+    def _get_secret_key() -> str:
+        """获取 JWT 密钥（每次从配置读取，支持热更新）"""
+        key = config.get('jwt_secret_key', 'your-secret-key-change-this-in-production')
+        if not key or not isinstance(key, str):
+            key = 'your-secret-key-change-this-in-production'
+        return key
 
+    @staticmethod
+    def hash_password(password: str) -> str:
         return hashlib.sha256(password.encode()).hexdigest()
     
     @staticmethod
@@ -37,18 +40,17 @@ class AuthManager:
             'exp': get_now() + timedelta(hours=AuthManager.TOKEN_EXPIRE_HOURS),
             'iat': get_now()
         }
-        return jwt.encode(payload, AuthManager.SECRET_KEY, algorithm=AuthManager.ALGORITHM)
+        return jwt.encode(payload, AuthManager._get_secret_key(), algorithm=AuthManager.ALGORITHM)
     
     @staticmethod
     def decode_token(token: str) -> Optional[Dict[str, Any]]:
         """解码访问令牌"""
         try:
-            payload = jwt.decode(token, AuthManager.SECRET_KEY, algorithms=[AuthManager.ALGORITHM])
+            payload = jwt.decode(token, AuthManager._get_secret_key(), algorithms=[AuthManager.ALGORITHM])
             return payload
         except jwt.ExpiredSignatureError:
             return None
         except jwt.InvalidTokenError as e:
-            # 记录错误以便调试
             print(f"[DEBUG] Token decode error: {e}")
             return None
     

@@ -74,6 +74,10 @@ class UserManager:
             session.add(user_config)
             await session.commit()
             
+            # 初始化用户数据目录
+            from backend.user.data_manager import user_data_manager
+            user_data_manager.init_user_data(user.id)
+            
             return user
     
     async def get_user_by_id(self, user_id: int) -> Optional[User]:
@@ -147,6 +151,10 @@ class UserManager:
             user_config = UserConfig(user_id=user.id)
             session.add(user_config)
             await session.commit()
+
+            # 初始化用户数据目录
+            from backend.user.data_manager import user_data_manager
+            user_data_manager.init_user_data(user.id)
 
             return user
     

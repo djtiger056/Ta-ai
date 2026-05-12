@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from backend.core.proactive import ProactiveChatScheduler
+from backend.core.cerebellum.models import MotivationSignal
 
 
 class DummyBot:
@@ -134,3 +135,24 @@ def test_enqueue_web_message_preserves_text_and_image():
     assert len(messages) == 1
     assert messages[0]["content"] == "你好呀"
     assert messages[0]["image_base64"]
+
+
+@pytest.mark.asyncio
+async def test_motivation_signal_triggers_proactive_message():
+    scheduler = build_scheduler()
+    signal = MotivationSignal(
+        motivation_type="share",
+        intensity=0.88,
+        description="想分享开心的事",
+        suggested_action="主动找用户聊天",
+        dominant_emotion="joy",
+        dominant_emotion_intensity=0.88,
+    )
+
+    sent = await scheduler.handle_motivation_signal(signal)
+
+    assert sent is True
+    messages = scheduler.poll_pending_messages("web", "web_user", "web_user")
+    assert len(messages) == 1
+    assert messages[0]["content"] == "主动消息测试"
+    assert "当前小脑动机" in scheduler.bot.instructions[-1]
