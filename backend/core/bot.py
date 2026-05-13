@@ -219,10 +219,7 @@ class Bot:
         if not self.memory_manager or not await self._ensure_memory_manager_initialized():
             return
 
-        try:
-            count = int(getattr(config.memory_config, "mid_term_context_count", 0) or 0)
-        except Exception:
-            count = 0
+        count = config.memory_config.mid_term_context_count
         if count <= 0:
             return
         if not getattr(config.memory_config, "mid_term_enabled", True):
@@ -256,7 +253,7 @@ class Bot:
         if not lines:
             return
 
-        context = "以下是最近的对话摘要（中期记忆），用于保持连续性；只在与当前问题直接相关时自然参考，不要逐条复述：\n" + "\n".join(lines)
+        context = "你对最近和对方聊过的内容有印象（以下是你的回忆片段）。如果当前话题和之前聊过的有关，可以自然地接续；不要原文复述这些内容，不相关就不提：\n" + "\n".join(lines)
         if enhanced_history and enhanced_history[0]["role"] == "system":
             enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + context
         else:
@@ -484,8 +481,8 @@ class Bot:
             return ""
 
         return (
-            "以下是可参考的关系记忆（仅在与当前问题直接相关时自然带一句，"
-            "不要逐条回答、不要复述原句）：\n"
+            "你记得关于对方的这些事（这是你自己的记忆，不要说'根据记忆'，"
+            "像真正记得一样自然地在相关时提及，不要逐条列举，不相关就不提）：\n"
             + "\n".join(selected_lines)
         )
     

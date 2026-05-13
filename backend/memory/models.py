@@ -40,6 +40,7 @@ class MemoryConfig(BaseModel):
     embedding_dimensions: Optional[int] = Field(default=None, description="嵌入向量维度（外部模型/降级时使用）")
     rag_top_k: int = Field(default=3, description="RAG检索返回的top-k数量")
     rag_score_threshold: float = Field(default=0.5, description="RAG检索分数阈值")
+    mid_term_context_count: int = Field(default=5, description="注入LLM上下文的中期摘要条数")
 
     # 兼容字段：历史上用于“短期记忆最大轮次”，Bot侧会用 *2 换算为 message 数量
     short_term_max_rounds: int = Field(default=50, description="短期记忆最大轮次（兼容字段，1轮≈user+assistant）")
