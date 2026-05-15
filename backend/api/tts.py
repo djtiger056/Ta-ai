@@ -28,6 +28,7 @@ class TTSConfigRequest(BaseModel):
     """TTS配置请求"""
     enabled: Optional[bool] = Field(None, description="是否启用TTS")
     probability: Optional[float] = Field(None, description="TTS触发概率")
+    proactive_enabled: Optional[bool] = Field(None, description="是否允许AI主动触发TTS")
     provider: Optional[str] = Field(None, description="TTS提供商")
     voice_only_when_tts: Optional[bool] = Field(None, description="启用后有语音时隐藏对应文本，仅发送语音")
     qihang: Optional[Dict[str, Any]] = Field(None, description="启航AI配置")

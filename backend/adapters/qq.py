@@ -13,6 +13,7 @@ from ..core.bot import Bot
 from ..config import config
 from ..api import proactive as proactive_api
 from ..utils.text_splitter import smart_split_text
+from .debouncer import MessageDebouncer
 
 
 class QQAdapter:
@@ -53,6 +54,18 @@ class QQAdapter:
         # 重连状态
         self.reconnect_attempts = 0
         self.last_reconnect_time = 0
+        
+        # 消息防抖配置
+        self.debounce_config = self.qq_config.get('debounce', {})
+        self.debounce_enabled = self.debounce_config.get('enabled', False)
+        self.debounce_delay = self.debounce_config.get('delay', 3.0)
+        self.debounce_max_wait = self.debounce_config.get('max_wait', 15.0)
+        self.debounce_separator = self.debounce_config.get('separator', '\n')
+        self.debouncer = MessageDebouncer(
+            delay=self.debounce_delay,
+            max_wait=self.debounce_max_wait,
+            separator=self.debounce_separator,
+        )
         
         self.websocket = None
         self.running = False
@@ -264,6 +277,19 @@ class QQAdapter:
             return
 
         # 生成回复
+        if self.debounce_enabled:
+            # 使用防抖器：等待用户发完所有消息后再统一回复
+            debounce_key = f"private_{user_id}"
+            await self.debouncer.add_message(
+                debounce_key,
+                text_content,
+                callback=lambda merged_text: self._do_private_reply(user_id, merged_text),
+            )
+        else:
+            await self._do_private_reply(user_id, text_content)
+
+    async def _do_private_reply(self, user_id: str, text_content: str):
+        """执行私聊回复（可能由防抖器合并后调用）"""
         try:
             proactive_api.record_user_activity("qq_private", user_id, user_id, text_content)
             response = await self.bot.chat(text_content, user_id=user_id)
@@ -278,7 +304,6 @@ class QQAdapter:
             voice_only = self.bot.is_voice_only_mode(user_id)
 
             if voice_only:
-                # 语音优先，失败则回退文本；文本中移除已播报部分
                 audio_data = await self._resolve_tts_audio(response, user_id)
 
                 text_to_send = self.bot.strip_tts_text(response, user_id=user_id)
@@ -290,24 +315,19 @@ class QQAdapter:
                     print(f"🎵 语音合成成功，大小: {len(audio_data)} bytes")
                     await self.send_voice_message(user_id, audio_data)
 
-                # 延迟发送主动生成的图片（2秒后）
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"], is_group=False))
             else:
-                # 先合成语音，再发送文本（移除已用于TTS的部分），最后发送语音
                 audio_data = await self._resolve_tts_audio(response, user_id)
 
-                # 移除已用于TTS的文本
                 text_to_send = self.bot.strip_tts_text(response, user_id=user_id)
                 if text_to_send:
                     await self.send_private_message(user_id, text_to_send)
 
-                # 发送语音
                 if audio_data:
                     print(f"🎵 发送语音消息")
                     await self.send_voice_message(user_id, audio_data)
 
-                # 延迟发送主动生成的图片（2秒后）
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"], is_group=False))
 
@@ -316,26 +336,8 @@ class QQAdapter:
             except Exception as e:
                 print(f"[Emote] emote send failed: {str(e)}")
 
-            
         except Exception as e:
             print(f"❌ 私聊回复失败: {str(e)}")
-            # 如果LLM失败，尝试取消异步任务
-            if image_task:
-                image_task.cancel()
-                try:
-                    await image_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-            if vision_task:
-                vision_task.cancel()
-                try:
-                    await vision_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
             await self.send_private_message(user_id, "抱歉，回复失败了...")
     
     async def _handle_group_message(self, data: Dict[str, Any]):
@@ -415,6 +417,19 @@ class QQAdapter:
             return
 
         # 生成回复
+        if self.debounce_enabled:
+            # 使用防抖器：等待用户发完所有消息后再统一回复
+            debounce_key = f"group_{group_id}_{user_id}"
+            await self.debouncer.add_message(
+                debounce_key,
+                text_content,
+                callback=lambda merged_text: self._do_group_reply(group_id, user_id, merged_text),
+            )
+        else:
+            await self._do_group_reply(group_id, user_id, text_content)
+
+    async def _do_group_reply(self, group_id: str, user_id: str, text_content: str):
+        """执行群聊回复（可能由防抖器合并后调用）"""
         try:
             session_id = f"group_{group_id}_{user_id}"
             proactive_api.record_user_activity("qq_group", group_id, session_id, text_content)
@@ -444,24 +459,19 @@ class QQAdapter:
                     print(f"🎵 语音合成成功，大小: {len(audio_data)} bytes")
                     await self.send_voice_message(group_id, audio_data, is_group=True, group_id=group_id)
 
-                # 延迟发送主动生成的图片（2秒后）
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(group_id, last_image["image_data"], is_group=True, group_id=group_id))
             else:
-                # 先合成语音，再发送文本（移除已用于TTS的部分），最后发送语音
                 audio_data = await self._resolve_tts_audio(response, user_id)
 
-                # 移除已用于TTS的文本
                 text_to_send = self.bot.strip_tts_text(response, user_id=user_id)
                 if text_to_send:
                     await self.send_group_message(group_id, text_to_send)
 
-                # 发送语音
                 if audio_data:
                     print(f"🎵 发送语音消息")
                     await self.send_voice_message(group_id, audio_data, is_group=True, group_id=group_id)
 
-                # 延迟发送主动生成的图片（2秒后）
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(group_id, last_image["image_data"], is_group=True, group_id=group_id))
 
@@ -470,26 +480,8 @@ class QQAdapter:
             except Exception as e:
                 print(f"[Emote] emote send failed: {str(e)}")
 
-            
         except Exception as e:
             print(f"❌ 群回复失败: {str(e)}")
-            # 如果LLM失败，尝试取消异步任务
-            if image_task:
-                image_task.cancel()
-                try:
-                    await image_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
-            if vision_task:
-                vision_task.cancel()
-                try:
-                    await vision_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
             await self.send_group_message(group_id, "抱歉，回复失败了...")
     
     def _get_conversation_key(self, target_id: str, is_group: bool, user_id: Optional[str] = None) -> str:

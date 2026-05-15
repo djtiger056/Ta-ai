@@ -937,6 +937,11 @@ class Bot:
         if not tts_manager.config.enabled:
             return None
 
+        # 检查是否允许 AI 主动触发 TTS
+        if not getattr(tts_manager.config, "proactive_enabled", True):
+            print(f"[Bot] AI主动触发TTS已禁用，跳过合成")
+            return None
+
         # 文本清洗但跳过概率判断
         cleaned_text = tts_manager.text_cleaner.clean(text)
         if not cleaned_text.strip():

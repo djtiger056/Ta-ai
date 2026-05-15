@@ -372,6 +372,15 @@ const TTSConfigPage: React.FC = () => {
                 <Switch checkedChildren="仅语音" unCheckedChildren="文本+语音" />
               </Form.Item>
 
+              <Form.Item
+                name="proactive_enabled"
+                label="允许AI主动触发TTS"
+                valuePropName="checked"
+                help="开启后，AI可以通过[TTS]标签主动决定哪些内容需要语音播报；关闭后AI的主动语音请求将被忽略"
+              >
+                <Switch checkedChildren="允许" unCheckedChildren="禁止" />
+              </Form.Item>
+
               <Divider>随机播报</Divider>
 
               <Form.Item

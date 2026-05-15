@@ -21,6 +21,7 @@ from ..api import proactive as proactive_api
 from ..core.gen_img_parser import extract_gen_img_prompt
 from ..utils.text_splitter import smart_split_text
 from ..voice_call import VoiceCallManager, VoiceCallConfig
+from .debouncer import MessageDebouncer
 
 
 class LinyuAdapter:
@@ -93,6 +94,18 @@ class LinyuAdapter:
         self.token: Optional[str] = None
         self.user_id: Optional[str] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
+
+        # 消息防抖配置
+        self.debounce_config = self.linyu_config.get('debounce', {})
+        self.debounce_enabled = self.debounce_config.get('enabled', False)
+        self.debounce_delay = self.debounce_config.get('delay', 3.0)
+        self.debounce_max_wait = self.debounce_config.get('max_wait', 15.0)
+        self.debounce_separator = self.debounce_config.get('separator', '\n')
+        self.debouncer = MessageDebouncer(
+            delay=self.debounce_delay,
+            max_wait=self.debounce_max_wait,
+            separator=self.debounce_separator,
+        )
 
         self.follow_up_waiters: Dict[str, asyncio.Future] = {}
         self._emote_send_cache: Dict[str, Dict[str, float]] = {}
@@ -473,6 +486,19 @@ class LinyuAdapter:
             )
             return
 
+        if self.debounce_enabled:
+            # 使用防抖器：等待用户发完所有消息后再统一回复
+            debounce_key = f"linyu_{user_id}"
+            await self.debouncer.add_message(
+                debounce_key,
+                text_content,
+                callback=lambda merged_text: self._do_text_reply(user_id, merged_text),
+            )
+        else:
+            await self._do_text_reply(user_id, text_content)
+
+    async def _do_text_reply(self, user_id: str, text_content: str):
+        """执行文本回复（可能由防抖器合并后调用）"""
         try:
             proactive_api.record_user_activity("linyu_private", user_id, user_id, text_content)
             response = await self._stream_reply_by_sentence(
@@ -510,12 +536,6 @@ class LinyuAdapter:
         except Exception as e:
             print(f"❌ 私聊回复失败: {type(e).__name__}: {str(e)}")
             traceback.print_exc()
-            if image_task:
-                image_task.cancel()
-                try:
-                    await image_task
-                except Exception:
-                    pass
             await self.send_private_message(user_id, "抱歉，回复失败了...")
 
     async def _handle_image_message(self, user_id: str, msg_id: str, msg_content: Dict[str, Any]):

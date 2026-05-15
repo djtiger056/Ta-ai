@@ -20,6 +20,7 @@ class TTSConfig(BaseModel):
     """TTS 配置"""
     enabled: bool = Field(True, description="是否启用TTS")
     probability: float = Field(1.0, description="TTS触发概率，0-1之间")
+    proactive_enabled: bool = Field(True, description="是否允许AI主动触发TTS（通过[TTS]标签）")
     provider: str = Field("qihang", description="TTS提供商(qihang/qwen)")
     voice_only_when_tts: bool = Field(False, description="启用后有语音时隐藏对应文本，仅发送语音")
     qihang: Dict[str, Any] = Field(default_factory=lambda: {

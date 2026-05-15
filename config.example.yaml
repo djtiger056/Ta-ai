@@ -86,6 +86,11 @@ adapters:
     enabled: false
     ws_url: ws://127.0.0.1:3001
     bot_qq: ""
+    debounce:
+      enabled: false
+      delay: 3.0
+      max_wait: 15.0
+      separator: "\n"
     access_control:
       enabled: false
       mode: disabled
@@ -97,10 +102,16 @@ adapters:
     base_url: http://127.0.0.1:8000
     account: ""
     password: ""
+    debounce:
+      enabled: false
+      delay: 3.0
+      max_wait: 15.0
+      separator: "\n"
 
 tts:
   enabled: false
   probability: 1.0
+  proactive_enabled: true
   provider: qihang
   voice_only_when_tts: false
   qihang:

@@ -367,6 +367,36 @@ const SettingsPage: React.FC = () => {
                             </Form.Item>
                           </Col>
                         </Row>
+
+                        <Divider orientation="left" plain>消息防抖（合并）</Divider>
+                        <Form.Item
+                          name={['adapters', 'qq', 'debounce', 'enabled']}
+                          label="启用消息防抖"
+                          valuePropName="checked"
+                          help="用户短时间内连续发送多条消息时，合并为一条后再回复，避免AI多次打断"
+                        >
+                          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+                        </Form.Item>
+                        <Row gutter={16}>
+                          <Col span={12}>
+                            <Form.Item
+                              name={['adapters', 'qq', 'debounce', 'delay']}
+                              label="等待时间（秒）"
+                              help="最后一条消息后等待多久再回复"
+                            >
+                              <InputNumber min={1} max={30} step={0.5} style={{ width: '100%' }} placeholder="3.0" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={12}>
+                            <Form.Item
+                              name={['adapters', 'qq', 'debounce', 'max_wait']}
+                              label="最大等待时间（秒）"
+                              help="防止用户一直打字导致永远不回复"
+                            >
+                              <InputNumber min={5} max={60} step={1} style={{ width: '100%' }} placeholder="15.0" />
+                            </Form.Item>
+                          </Col>
+                        </Row>
                       </>
                     ) : (
                       <Alert message="启用后展开详细配置" type="warning" showIcon={false}
@@ -506,6 +536,36 @@ const SettingsPage: React.FC = () => {
                           <Col span={12}>
                             <Form.Item name={['adapters', 'linyu', 'segment_config', 'min_sentences_to_split']} label="最小句子数阈值">
                               <InputNumber min={1} max={10} style={{ width: '100%' }} placeholder="2" />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+
+                        <Divider orientation="left" plain>消息防抖（合并）</Divider>
+                        <Form.Item
+                          name={['adapters', 'linyu', 'debounce', 'enabled']}
+                          label="启用消息防抖"
+                          valuePropName="checked"
+                          help="用户短时间内连续发送多条消息时，合并为一条后再回复，避免AI多次打断"
+                        >
+                          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+                        </Form.Item>
+                        <Row gutter={16}>
+                          <Col span={12}>
+                            <Form.Item
+                              name={['adapters', 'linyu', 'debounce', 'delay']}
+                              label="等待时间（秒）"
+                              help="最后一条消息后等待多久再回复"
+                            >
+                              <InputNumber min={1} max={30} step={0.5} style={{ width: '100%' }} placeholder="3.0" />
+                            </Form.Item>
+                          </Col>
+                          <Col span={12}>
+                            <Form.Item
+                              name={['adapters', 'linyu', 'debounce', 'max_wait']}
+                              label="最大等待时间（秒）"
+                              help="防止用户一直打字导致永远不回复"
+                            >
+                              <InputNumber min={5} max={60} step={1} style={{ width: '100%' }} placeholder="15.0" />
                             </Form.Item>
                           </Col>
                         </Row>
