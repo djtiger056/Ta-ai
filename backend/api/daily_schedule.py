@@ -115,6 +115,17 @@ async def trigger_generate(req: GenerateRequest):
     """
     try:
         generator = _get_generator()
+
+        # 先检查是否已生成，给出更明确的提示
+        if not req.force and generator.is_generated_today():
+            data = _read_generated_file()
+            return {
+                "success": False,
+                "message": "今日作息表已存在，如需重新生成请传 force=true",
+                "slot_count": len(data.get("slots", [])) if data else 0,
+                "generated_at": data.get("generated_at") if data else None,
+            }
+
         success = await generator.generate_for_today(force=req.force)
         if success:
             data = _read_generated_file()
@@ -125,13 +136,20 @@ async def trigger_generate(req: GenerateRequest):
                 "generated_at": data.get("generated_at") if data else None,
             }
         else:
-            # 已生成过且未强制
-            data = _read_generated_file()
+            # generate_for_today 返回 False 但不是因为已存在，说明是 enabled=False 或 LLM 失败
+            gen_cfg = config.get("daily_schedule_generation", {}) or {}
+            if not gen_cfg.get("enabled", True):
+                return {
+                    "success": False,
+                    "message": "作息生成功能已禁用，请在配置中启用 daily_schedule_generation.enabled",
+                    "slot_count": 0,
+                    "generated_at": None,
+                }
             return {
                 "success": False,
-                "message": "今日作息表已存在，如需重新生成请传 force=true",
-                "slot_count": len(data.get("slots", [])) if data else 0,
-                "generated_at": data.get("generated_at") if data else None,
+                "message": "作息表生成失败（LLM 调用失败或返回格式异常），请检查后端日志",
+                "slot_count": 0,
+                "generated_at": None,
             }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"生成失败: {exc}")

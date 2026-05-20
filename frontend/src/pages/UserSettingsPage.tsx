@@ -27,8 +27,10 @@ import {
   DeleteOutlined,
   QqOutlined,
   LinkOutlined,
+  FileTextOutlined,
+  ToolOutlined,
 } from '@ant-design/icons';
-import { userConfigApi, configApi, authApi } from '@/services/api';
+import { userConfigApi, configApi, authApi, promptApi } from '@/services/api';
 import axios from 'axios';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -210,6 +212,15 @@ const UserSettingsPage: React.FC = () => {
   const [testing, setTesting] = useState(false);
   const [userConfig, setUserConfig] = useState<any>(null);
   const [globalConfig, setGlobalConfig] = useState<any>(null);
+  // 提示词系统状态
+  const [promptContent, setPromptContent] = useState('');
+  const [promptIsCustom, setPromptIsCustom] = useState(false);
+  const [defaultPrompt, setDefaultPrompt] = useState('');
+  const [rulesContent, setRulesContent] = useState('');
+  const [rulesIsCustom, setRulesIsCustom] = useState(false);
+  const [defaultRules, setDefaultRules] = useState('');
+  const [savingPrompt, setSavingPrompt] = useState(false);
+  const [savingRules, setSavingRules] = useState(false);
   const { user, isAdmin } = useAuth();
 
   useEffect(() => {
@@ -219,18 +230,27 @@ const UserSettingsPage: React.FC = () => {
   const loadConfigs = async () => {
     setLoading(true);
     try {
-      // 并行加载用户配置和全局配置
-      const [userCfg, globalCfg] = await Promise.all([
+      // 并行加载用户配置、全局配置、提示词系统
+      const [userCfg, globalCfg, promptData, rulesData, defPrompt, defRules] = await Promise.all([
         userConfigApi.getConfig(),
         configApi.getConfig(),
+        promptApi.getPrompt(),
+        promptApi.getRules(),
+        promptApi.getDefaultPrompt(),
+        promptApi.getDefaultRules(),
       ]);
       
       setUserConfig(userCfg);
       setGlobalConfig(globalCfg);
+      setPromptContent(promptData.content);
+      setPromptIsCustom(promptData.is_custom);
+      setDefaultPrompt(defPrompt);
+      setRulesContent(rulesData.content);
+      setRulesIsCustom(rulesData.is_custom);
+      setDefaultRules(defRules);
       
-      // 设置表单值（用户配置优先，否则显示全局配置作为占位符）
+      // 设置表单值（LLM / TTS）
       form.setFieldsValue({
-        system_prompt: userCfg.system_prompt || '',
         llm: userCfg.llm || {},
         tts: userCfg.tts || {},
       });
@@ -251,12 +271,8 @@ const UserSettingsPage: React.FC = () => {
     try {
       const values = form.getFieldsValue();
       
-      // 构建更新数据，只包含用户实际填写的字段
+      // 只保存 LLM / TTS 配置
       const updateData: any = {};
-      
-      if (values.system_prompt) {
-        updateData.system_prompt = values.system_prompt;
-      }
       
       if (values.llm && Object.keys(values.llm).some(k => values.llm[k])) {
         updateData.llm = values.llm;
@@ -273,6 +289,60 @@ const UserSettingsPage: React.FC = () => {
       message.error('保存失败: ' + (error.response?.data?.detail || error.message));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSavePrompt = async () => {
+    if (!promptContent.trim()) {
+      message.warning('提示词内容不能为空');
+      return;
+    }
+    setSavingPrompt(true);
+    try {
+      await promptApi.updatePrompt(promptContent);
+      message.success('人设提示词已保存');
+      setPromptIsCustom(true);
+    } catch (error: any) {
+      message.error('保存失败: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setSavingPrompt(false);
+    }
+  };
+
+  const handleResetPrompt = async () => {
+    try {
+      await promptApi.resetPrompt();
+      const defPrompt = await promptApi.getDefaultPrompt();
+      setPromptContent(defPrompt);
+      setPromptIsCustom(false);
+      message.success('已重置为全局默认人设');
+    } catch (error: any) {
+      message.error('重置失败: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleSaveRules = async () => {
+    setSavingRules(true);
+    try {
+      await promptApi.updateRules(rulesContent);
+      message.success('功能协议已保存');
+      setRulesIsCustom(true);
+    } catch (error: any) {
+      message.error('保存失败: ' + (error.response?.data?.detail || error.message));
+    } finally {
+      setSavingRules(false);
+    }
+  };
+
+  const handleResetRules = async () => {
+    try {
+      await promptApi.resetRules();
+      const defRules = await promptApi.getDefaultRules();
+      setRulesContent(defRules);
+      setRulesIsCustom(false);
+      message.success('已重置为全局默认功能协议');
+    } catch (error: any) {
+      message.error('重置失败: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -538,50 +608,142 @@ const UserSettingsPage: React.FC = () => {
                 key: 'prompt',
                 label: (
                   <span>
-                    系统提示词
-                    {userConfig?.system_prompt && (
+                    提示词
+                    {(promptIsCustom || rulesIsCustom) && (
                       <Tag color="green" style={{ marginLeft: 8 }}>已自定义</Tag>
                     )}
                   </span>
                 ),
                 children: (
-                  <>
-                    <Form.Item
-                      label="我的系统提示词"
-                      name="system_prompt"
-                      help="定义 AI 的角色和行为方式。留空则使用系统默认提示词。"
-                    >
-                      <TextArea
-                        rows={12}
-                        placeholder={globalConfig?.system_prompt ? `默认提示词:\n${globalConfig.system_prompt.substring(0, 200)}...` : '输入你的自定义系统提示词'}
-                        allowClear
-                      />
-                    </Form.Item>
-
-                    {globalConfig?.system_prompt && (
-                      <Alert
-                        message="当前默认系统提示词"
-                        description={
-                          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: '200px', overflow: 'auto' }}>
-                            {globalConfig.system_prompt}
-                          </pre>
-                        }
-                        type="info"
-                        style={{ marginTop: 16 }}
-                      />
-                    )}
-
-                    <Popconfirm
-                      title="确定要重置系统提示词吗？"
-                      onConfirm={() => handleReset('system_prompt')}
-                      okText="确定"
-                      cancelText="取消"
-                    >
-                      <Button type="link" danger style={{ marginTop: 16 }}>
-                        重置系统提示词
-                      </Button>
-                    </Popconfirm>
-                  </>
+                  <Tabs
+                    defaultActiveKey="persona"
+                    size="small"
+                    items={[
+                      {
+                        key: 'persona',
+                        label: (
+                          <span>
+                            <FileTextOutlined /> 人设提示词
+                            {promptIsCustom && <Tag color="green" style={{ marginLeft: 6 }}>已自定义</Tag>}
+                          </span>
+                        ),
+                        children: (
+                          <>
+                            <Alert
+                              message="人设提示词"
+                              description="定义 AI 的角色、性格、世界观、语言风格和行为准则。这是 AI 的「灵魂」，用户可自由编辑。"
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 16 }}
+                            />
+                            <Input.TextArea
+                              rows={16}
+                              value={promptContent}
+                              onChange={e => setPromptContent(e.target.value)}
+                              placeholder="输入人设提示词，定义 AI 的角色和行为方式..."
+                              style={{ fontFamily: 'monospace', fontSize: 13 }}
+                            />
+                            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <Button
+                                type="primary"
+                                icon={<SaveOutlined />}
+                                loading={savingPrompt}
+                                onClick={handleSavePrompt}
+                              >
+                                保存人设
+                              </Button>
+                              <Popconfirm
+                                title="确定要重置人设提示词吗？"
+                                description="将恢复为全局默认人设"
+                                onConfirm={handleResetPrompt}
+                                okText="确定"
+                                cancelText="取消"
+                              >
+                                <Button icon={<DeleteOutlined />} danger>
+                                  重置为默认
+                                </Button>
+                              </Popconfirm>
+                              {promptIsCustom && (
+                                <Tag color="green"><InfoCircleOutlined /> 当前使用自定义人设</Tag>
+                              )}
+                            </div>
+                            {defaultPrompt && !promptIsCustom && (
+                              <Alert
+                                message="当前使用全局默认人设"
+                                type="warning"
+                                showIcon
+                                style={{ marginTop: 12 }}
+                              />
+                            )}
+                          </>
+                        ),
+                      },
+                      {
+                        key: 'rules',
+                        label: (
+                          <span>
+                            <ToolOutlined /> 功能协议
+                            {rulesIsCustom && <Tag color="green" style={{ marginLeft: 6 }}>已自定义</Tag>}
+                          </span>
+                        ),
+                        children: (
+                          <>
+                            <Alert
+                              message="功能协议"
+                              description={
+                                <span>
+                                  定义 AI 可以使用的功能指令，如图片发送 <code>[GEN_IMG:]</code>、语音 <code>[TTS]</code>、任务委派 <code>[DELEGATE:]</code> 等。
+                                  与人设分离，方便独立维护。留空则使用全局默认协议。
+                                </span>
+                              }
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 16 }}
+                            />
+                            <Input.TextArea
+                              rows={16}
+                              value={rulesContent}
+                              onChange={e => setRulesContent(e.target.value)}
+                              placeholder="输入功能协议，定义 AI 可使用的功能指令..."
+                              style={{ fontFamily: 'monospace', fontSize: 13 }}
+                            />
+                            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <Button
+                                type="primary"
+                                icon={<SaveOutlined />}
+                                loading={savingRules}
+                                onClick={handleSaveRules}
+                              >
+                                保存协议
+                              </Button>
+                              <Popconfirm
+                                title="确定要重置功能协议吗？"
+                                description="将恢复为全局默认功能协议"
+                                onConfirm={handleResetRules}
+                                okText="确定"
+                                cancelText="取消"
+                              >
+                                <Button icon={<DeleteOutlined />} danger>
+                                  重置为默认
+                                </Button>
+                              </Popconfirm>
+                              {rulesIsCustom && (
+                                <Tag color="green"><InfoCircleOutlined /> 当前使用自定义协议</Tag>
+                              )}
+                            </div>
+                            {defaultRules && !rulesIsCustom && (
+                              <Alert
+                                message="当前使用全局默认功能协议"
+                                type="warning"
+                                showIcon
+                                style={{ marginTop: 12 }}
+                              />
+                            )}
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
                 ),
               },
               {

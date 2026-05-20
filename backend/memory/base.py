@@ -547,6 +547,9 @@ class BaseMemoryManager(ABC):
                         payload = json.loads(item.content)
                         role = payload.get("role", "unknown")
                         content = payload.get("content", "")
+                        # 过滤空 content，避免脏数据污染摘要输入
+                        if not content or not content.strip():
+                            continue
                         conversations.append({"role": role, "content": content})
                     except Exception:
                         continue

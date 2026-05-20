@@ -52,8 +52,13 @@ class Config:
     
     @property
     def system_prompt(self) -> str:
-        """获取系统提示词"""
+        """获取系统提示词（人设层）"""
         return self._config.get('system_prompt', '')
+
+    @property
+    def system_rules(self) -> str:
+        """获取功能协议层提示词（视觉/语音/委派等协议，与人设分离）"""
+        return self._config.get('system_rules', '')
     
     @property
     def adapters_config(self) -> Dict[str, Any]:

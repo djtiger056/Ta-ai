@@ -43,6 +43,8 @@ class CerebellumEngine:
         self._last_persist_at: Optional[datetime] = None
         self._last_user_message_at: Dict[str, datetime] = {}
         self._inactivity_triggered_for: Dict[str, datetime] = {}
+        self._inactivity_last_fired_at: Dict[str, datetime] = {}
+        self._inactivity_fire_count: Dict[str, int] = {}
         self.active_motivations: Deque[MotivationSignal] = deque(maxlen=50)
         self.history: Deque[Dict[str, Any]] = deque(maxlen=max(1, self.config.history_limit))
         self._last_active_target_key: Optional[str] = None
@@ -63,11 +65,11 @@ class CerebellumEngine:
         cfg = CerebellumConfigData(
             enabled=bool(raw.get("enabled", False)),
             tick_interval=self._safe_int(raw.get("tick_interval"), 30, 10, 86400),
-            decay_rate=self._safe_float(raw.get("decay_rate"), 0.015, 0.0, 1.0),
-            action_threshold=self._safe_float(raw.get("action_threshold"), 0.68, 0.0, 1.0),
+            decay_rate=self._safe_float(raw.get("decay_rate"), 0.008, 0.0, 1.0),
+            action_threshold=self._safe_float(raw.get("action_threshold"), 0.52, 0.0, 1.0),
             persistence_interval=self._safe_int(raw.get("persistence_interval"), 300, 30, 86400),
             state_file=str(raw.get("state_file") or "data/cerebellum_state.json"),
-            max_stimulus_step=self._safe_float(raw.get("max_stimulus_step"), 0.18, 0.01, 1.0),
+            max_stimulus_step=self._safe_float(raw.get("max_stimulus_step"), 0.28, 0.01, 1.0),
             history_limit=self._safe_int(raw.get("history_limit"), 2880, 10, 100000),
             replace_time_windows=bool(raw.get("replace_time_windows", True)),
             motivation_cooldown_seconds=self._safe_int(raw.get("motivation_cooldown_seconds"), 1800, 60, 86400),
@@ -75,9 +77,19 @@ class CerebellumEngine:
             circadian=self._merge_dict(DEFAULT_CIRCADIAN, raw.get("circadian") if isinstance(raw.get("circadian"), dict) else {}),
             inactivity_stimulus=self._merge_dict({
                 "enabled": True,
-                "after_seconds": 21600,
-                "intensity": 0.22,
+                "after_seconds": 10800,
+                "intensity": 0.35,
+                "repeat_interval_seconds": 7200,
+                "escalation_factor": 1.15,
+                "max_intensity": 0.65,
             }, raw.get("inactivity_stimulus") if isinstance(raw.get("inactivity_stimulus"), dict) else {}),
+            autonomous_drift=self._merge_dict({
+                "enabled": True,
+                "drift_probability": 0.25,
+                "drift_step": 0.03,
+                "preferred_emotions": ["joy", "pleasure", "sadness"],
+                "sadness_weight_when_inactive": 0.6,
+            }, raw.get("autonomous_drift") if isinstance(raw.get("autonomous_drift"), dict) else {}),
         )
         return cfg
 
@@ -134,6 +146,7 @@ class CerebellumEngine:
                 self._apply_stimulus(stimulus)
             self._apply_micro_wave(now)
             self._apply_inactivity_stimulus(now)
+            self._apply_autonomous_drift(now)
             self.state.baselines = baselines
             self.state.dominant_emotion = self._dominant_emotion()
             self.state.last_updated_at = now
@@ -156,6 +169,8 @@ class CerebellumEngine:
             key = self._compose_target_key(stimulus.channel or "web", stimulus.user_id, stimulus.session_id)
             self._last_user_message_at[key] = stimulus.created_at
             self._inactivity_triggered_for.pop(key, None)
+            self._inactivity_last_fired_at.pop(key, None)
+            self._inactivity_fire_count.pop(key, None)
             self._last_active_target_key = key
         await self._stimuli.put(stimulus)
 
@@ -365,49 +380,177 @@ class CerebellumEngine:
             return
         if not self._time_in_range(now, active.get("start", "08:00"), active.get("end", "22:00")):
             return
-        probability = self._safe_float(active.get("micro_wave_probability"), 0.35, 0.0, 1.0)
+        probability = self._safe_float(active.get("micro_wave_probability"), 0.40, 0.0, 1.0)
         if random.random() > probability:
             return
-        amplitude = min(self.config.max_stimulus_step, self._safe_float(active.get("micro_wave_amplitude"), 0.05, 0.0, 1.0))
-        emotion = random.choice([e for e in EMOTIONS if e != "anger"])
-        delta = random.uniform(-amplitude, amplitude)
-        self.state.intensities[emotion] = clamp(self.state.intensities.get(emotion, 0.0) + delta)
+        amplitude = min(self.config.max_stimulus_step, self._safe_float(active.get("micro_wave_amplitude"), 0.06, 0.0, 1.0))
+        positive_bias = self._safe_float(active.get("positive_bias"), 0.55, 0.0, 1.0)
+        # 微波在基线附近波动，不会单方向累积
+        # 如果情绪已经高于基线较多，微波倾向于向下拉回
+        all_emotions = [e for e in EMOTIONS if e != "anger"]
+        emotion = random.choice(all_emotions)
+        current = self.state.intensities.get(emotion, 0.0)
+        baseline = self.state.baselines.get(emotion, 0.2)
+        deviation = current - baseline
+
+        if deviation > amplitude * 2:
+            # 已经偏离基线较多，微波倾向于拉回
+            delta = random.uniform(-amplitude, amplitude * 0.3)
+        elif random.random() < positive_bias and emotion in ("joy", "pleasure", "surprise"):
+            delta = random.uniform(0, amplitude)
+        else:
+            delta = random.uniform(-amplitude * 0.6, amplitude)
+
+        self.state.intensities[emotion] = clamp(current + delta)
         if delta > 0:
             self.state.last_triggered_emotion = emotion
 
     def _apply_inactivity_stimulus(self, now: datetime):
+        """可重复触发的不活跃刺激，随时间升级强度。"""
         cfg = self.config.inactivity_stimulus
         if not isinstance(cfg, dict) or not cfg.get("enabled", True):
             return
-        after_seconds = self._safe_int(cfg.get("after_seconds"), 21600, 60, 604800)
-        intensity = self._safe_float(cfg.get("intensity"), 0.22, 0.0, 1.0)
+        after_seconds = self._safe_int(cfg.get("after_seconds"), 10800, 60, 604800)
+        base_intensity = self._safe_float(cfg.get("intensity"), 0.35, 0.0, 1.0)
+        repeat_interval = self._safe_int(cfg.get("repeat_interval_seconds"), 7200, 300, 604800)
+        escalation_factor = self._safe_float(cfg.get("escalation_factor"), 1.15, 1.0, 3.0)
+        max_intensity = self._safe_float(cfg.get("max_intensity"), 0.65, 0.0, 1.0)
+
         for key, last_at in list(self._last_user_message_at.items()):
-            if (now - last_at).total_seconds() < after_seconds:
+            silence_seconds = (now - last_at).total_seconds()
+            if silence_seconds < after_seconds:
                 continue
-            if self._inactivity_triggered_for.get(key) == last_at:
+
+            # 检查是否到了可以再次触发的时间
+            last_fired = self._inactivity_last_fired_at.get(key)
+            if last_fired and (now - last_fired).total_seconds() < repeat_interval:
                 continue
+
+            # 计算升级后的强度
+            fire_count = self._inactivity_fire_count.get(key, 0)
+            intensity = min(max_intensity, base_intensity * (escalation_factor ** fire_count))
+
             self._apply_stimulus(ExternalStimulus(
                 stimulus_type="ignored",
                 intensity=intensity,
                 valence="negative",
                 source="system",
             ))
-            self._inactivity_triggered_for[key] = last_at
+            # 同时增加一点"想念"的正面情绪（想找人聊天）
+            longing_intensity = intensity * 0.3
+            self.state.intensities["joy"] = clamp(
+                self.state.intensities.get("joy", 0.0) + longing_intensity * self.config.max_stimulus_step
+            )
+
+            self._inactivity_last_fired_at[key] = now
+            self._inactivity_fire_count[key] = fire_count + 1
+
+    def _apply_autonomous_drift(self, now: datetime):
+        """自主情绪漂移：模拟角色在无外部刺激时的内心活动。
+        
+        当用户长时间不互动时，情绪会缓慢向某个方向漂移，
+        最终可以突破阈值触发主动消息。这模拟了"想起对方"的心理过程。
+        仅在用户沉默超过30分钟后才开始生效。
+        """
+        drift_cfg = self.config.autonomous_drift
+        if not isinstance(drift_cfg, dict) or not drift_cfg.get("enabled", True):
+            return
+
+        # 只有在用户沉默超过30分钟后才启动漂移
+        if not self._last_user_message_at:
+            return
+        latest_msg = max(self._last_user_message_at.values())
+        silence_minutes = (now - latest_msg).total_seconds() / 60
+        if silence_minutes < 30:
+            return
+
+        drift_probability = self._safe_float(drift_cfg.get("drift_probability"), 0.25, 0.0, 1.0)
+        if random.random() > drift_probability:
+            return
+
+        drift_step = self._safe_float(drift_cfg.get("drift_step"), 0.03, 0.0, 0.2)
+        preferred_emotions = drift_cfg.get("preferred_emotions") or ["joy", "pleasure", "sadness"]
+        sadness_weight = self._safe_float(drift_cfg.get("sadness_weight_when_inactive"), 0.6, 0.0, 1.0)
+
+        # 沉默越久，漂移步长略微增大（模拟越来越想念）
+        silence_bonus = min(0.02, silence_minutes / 6000)
+        effective_step = drift_step + silence_bonus
+
+        # 判断是否处于长时间不活跃状态（超过2小时）
+        is_long_inactive = silence_minutes > 120
+
+        if is_long_inactive:
+            # 长时间不活跃：偏向sadness和想念相关情绪
+            if random.random() < sadness_weight:
+                target_emotion = "sadness"
+            else:
+                target_emotion = random.choice(["joy", "pleasure"])
+        else:
+            # 短时间不活跃：偏向正面情绪漂移
+            valid_emotions = [e for e in preferred_emotions if e in EMOTIONS]
+            target_emotion = random.choice(valid_emotions) if valid_emotions else "joy"
+
+        current = self.state.intensities.get(target_emotion, 0.0)
+        baseline = self.state.baselines.get(target_emotion, DEFAULT_BASELINES.get(target_emotion, 0.2))
+        # 只在当前值高于基线时继续向上漂移，否则先拉到基线附近
+        if current >= baseline:
+            new_value = current + effective_step
+        else:
+            new_value = current + effective_step * 0.5
+
+        self.state.intensities[target_emotion] = clamp(new_value)
+        if new_value > current:
+            self.state.last_triggered_emotion = target_emotion
 
     def _evaluate_motivations(self, now: datetime) -> List[MotivationSignal]:
         intensities = self.state.intensities
+        threshold = self.config.action_threshold
         candidates: List[MotivationSignal] = []
+
+        # 只有在用户沉默超过一定时间后才评估动机（避免正常对话中触发主动消息）
+        min_silence_for_motivation = 600  # 至少沉默10分钟
+        if self._last_user_message_at:
+            latest_msg = max(self._last_user_message_at.values())
+            silence_seconds = (now - latest_msg).total_seconds()
+            if silence_seconds < min_silence_for_motivation:
+                return []
+
+        # 综合正面情绪：joy 和 pleasure 中较高者作为触发判断
         joy_strength = max(intensities.get("joy", 0.0), intensities.get("pleasure", 0.0))
-        if joy_strength >= self.config.action_threshold:
+
+        if joy_strength >= threshold:
             candidates.append(MotivationSignal("share", joy_strength, "情绪明亮，想把当下的开心分享给用户。", "主动发一条轻松分享或关心近况的消息。", self.state.dominant_emotion, intensities[self.state.dominant_emotion], created_at=now, target_key=self._last_active_target_key))
-        if intensities.get("sadness", 0.0) >= self.config.action_threshold:
+        if intensities.get("sadness", 0.0) >= threshold:
             candidates.append(MotivationSignal("confide", intensities["sadness"], "有些低落，想温柔地表达需要陪伴。", "主动发一条不施压的倾诉式问候。", self.state.dominant_emotion, intensities[self.state.dominant_emotion], created_at=now, target_key=self._last_active_target_key))
-        if intensities.get("fatigue", 0.0) >= self.config.action_threshold:
+        if intensities.get("fatigue", 0.0) >= threshold:
             candidates.append(MotivationSignal("rest", intensities["fatigue"], "疲倦感较高，想放慢节奏并表达休息需求。", "主动发一条短消息，语气柔和克制。", self.state.dominant_emotion, intensities[self.state.dominant_emotion], created_at=now, target_key=self._last_active_target_key))
-        if intensities.get("surprise", 0.0) >= self.config.action_threshold:
+        if intensities.get("surprise", 0.0) >= threshold:
             candidates.append(MotivationSignal("express", intensities["surprise"], "被某件事触动，想立刻表达。", "主动发一条带有即时感的小感叹。", self.state.dominant_emotion, intensities[self.state.dominant_emotion], created_at=now, target_key=self._last_active_target_key))
-        if intensities.get("anger", 0.0) >= self.config.action_threshold:
+        if intensities.get("anger", 0.0) >= threshold:
             candidates.append(MotivationSignal("express_boundary", intensities["anger"], "边界感被触动，想谨慎表达自己的感受。", "主动发一条温和但有边界的消息。", self.state.dominant_emotion, intensities[self.state.dominant_emotion], created_at=now, target_key=self._last_active_target_key))
+
+        # 长时间不活跃时的"想念"动机：即使单个情绪未达阈值，综合情绪偏离也可触发
+        if not candidates and self._last_user_message_at:
+            latest_msg = max(self._last_user_message_at.values())
+            silence_hours = (now - latest_msg).total_seconds() / 3600
+            if silence_hours >= 3:
+                # 计算所有情绪偏离基线的总量
+                total_deviation = sum(
+                    max(0, intensities.get(e, 0.0) - self.state.baselines.get(e, 0.0))
+                    for e in EMOTIONS
+                )
+                # 沉默越久，触发阈值越低（3小时起步，每小时降低0.02）
+                longing_threshold = max(0.12, 0.30 - (silence_hours - 3) * 0.02)
+                if total_deviation >= longing_threshold:
+                    strongest_emotion = max(EMOTIONS, key=lambda e: intensities.get(e, 0.0))
+                    candidates.append(MotivationSignal(
+                        "share", total_deviation,
+                        "想起了用户，内心有些波动想主动联系。",
+                        "主动发一条自然的消息，像突然想到对方一样。",
+                        strongest_emotion, intensities.get(strongest_emotion, 0.0),
+                        created_at=now, target_key=self._last_active_target_key
+                    ))
+
         candidates.sort(key=lambda item: item.intensity, reverse=True)
         return candidates
 

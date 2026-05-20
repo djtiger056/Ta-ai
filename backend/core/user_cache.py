@@ -214,7 +214,7 @@ class UserResourceCache:
         return manager
 
     def get_system_prompt(self, user_id: str) -> str:
-        """获取用户的系统提示词。
+        """获取用户的系统提示词（人设层）。
 
         优先级：
         1. 提示词系统（user_data/{username}/system_prompt.md）
@@ -231,6 +231,21 @@ class UserResourceCache:
         # 回退到旧逻辑（用户配置 > 全局配置）
         user_config = self._user_configs.get(user_id, {})
         return config_merger.get_system_prompt(config.system_prompt, user_config.get('system_prompt'))
+
+    def get_system_rules(self, user_id: str) -> str:
+        """获取用户的功能协议层提示词（视觉/语音/委派等协议）。
+
+        优先级：
+        1. 提示词系统（user_data/{username}/system_rules.md）
+        2. 全局 config.yaml 中的 system_rules
+
+        Returns:
+            功能协议内容，可能为空字符串（表示不注入）
+        """
+        username = self._resolve_username(user_id)
+        if username:
+            return prompt_manager.get_effective_rules(username)
+        return config.system_rules or ""
 
     def _resolve_username(self, user_id: str) -> Optional[str]:
         """从 user_id 解析出 username（用于提示词系统文件路径）。

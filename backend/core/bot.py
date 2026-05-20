@@ -550,7 +550,15 @@ class Bot:
             # 记忆中存储精简版，避免CQ码/过长描述污染上下文
             memory_user_message = self._sanitize_for_memory(user_message)
             memory_assistant_response = self._sanitize_for_memory(assistant_response)
-            
+
+            # 过滤空内容，避免脏数据写入记忆库污染后续摘要
+            if not memory_user_message.strip():
+                self.logger.debug("跳过空用户消息，不写入记忆")
+                return
+            if not memory_assistant_response.strip():
+                self.logger.debug("跳过空助手回复，不写入记忆")
+                return
+
             # 添加用户消息
             user_msg = ConversationMessage(
                 role="user",

@@ -768,8 +768,9 @@ class ProactiveChatScheduler:
 
     async def _check_and_generate_daily_schedule(self, now: datetime):
         """
-        在每天凌晨生成时间窗口内（默认 00:00-06:00），
-        若今天尚未生成作息表，则调用 LLM 生成。
+        检查今天是否已生成作息表，若未生成则自动生成。
+        不再严格限制只在凌晨窗口内生成——如果错过了窗口，
+        只要今天还没生成过，就会补充生成。
         """
         try:
             from backend.config import config as global_config
@@ -778,23 +779,6 @@ class ProactiveChatScheduler:
             gen_cfg = {}
 
         if not gen_cfg.get("enabled", True):
-            return
-
-        # 生成时间窗口（默认凌晨 0-6 点）
-        window_start_str = gen_cfg.get("generate_window_start", "00:00")
-        window_end_str = gen_cfg.get("generate_window_end", "06:00")
-        try:
-            from datetime import time as dtime
-            ws = dtime.fromisoformat(window_start_str)
-            we = dtime.fromisoformat(window_end_str)
-        except Exception:
-            ws = dtime(0, 0)
-            we = dtime(6, 0)
-
-        current_time = now.time().replace(second=0, microsecond=0)
-        in_window = ws <= current_time < we
-
-        if not in_window:
             return
 
         # 检查今天是否已生成
@@ -807,7 +791,7 @@ class ProactiveChatScheduler:
             if generator.is_generated_today():
                 return
 
-            print("[ScheduleGen] 开始生成今日作息表…")
+            print(f"[ScheduleGen] 今日作息表尚未生成，当前时间 {now.strftime('%H:%M')}，开始生成…")
             success = await generator.generate_for_today()
             if success:
                 print("[ScheduleGen] 今日作息表生成完成。")

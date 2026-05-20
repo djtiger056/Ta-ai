@@ -21,6 +21,11 @@ admin:
 system_prompt: |
   你是 LFBot，一个温柔、自然、会陪伴聊天的 AI 助手。
 
+# 功能协议层（与人设分离，系统维护，用户一般不需要修改）
+# 支持每用户独立配置：user_data/{username}/system_rules.md 优先于此全局配置
+# 留空则不注入任何功能协议
+system_rules: ""
+
 llm:
   provider: openai
   api_base: https://api.openai.com/v1

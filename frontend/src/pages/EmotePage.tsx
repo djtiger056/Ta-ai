@@ -13,8 +13,10 @@ import {
   Row,
   Col,
   Divider,
+  Modal,
+  Alert,
 } from 'antd'
-import { PlusOutlined, SaveOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons'
+import { PlusOutlined, SaveOutlined, ReloadOutlined, DeleteOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { emoteApi } from '@/services/api'
 import { EmoteCategory, EmoteConfig, EmoteCategoryInfo } from '@/types'
 
@@ -41,6 +43,15 @@ const EmotePage: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [keywordInputs, setKeywordInputs] = useState<Record<number, string>>({})
+  const [scanModalVisible, setScanModalVisible] = useState(false)
+  const [scanPath, setScanPath] = useState('')
+  const [scanning, setScanning] = useState(false)
+  const [scanResult, setScanResult] = useState<{
+    categories: EmoteCategoryInfo[]
+    total_categories: number
+    total_files: number
+    base_path: string
+  } | null>(null)
 
   const loadConfig = async () => {
     setLoading(true)
@@ -145,6 +156,64 @@ const EmotePage: React.FC = () => {
     }
   }
 
+  const handleScanFolder = async () => {
+    if (!scanPath.trim()) {
+      message.warning('请输入表情包文件夹路径')
+      return
+    }
+    setScanning(true)
+    setScanResult(null)
+    try {
+      const data = await emoteApi.scanFolder(scanPath.trim(), config.file_extensions)
+      setScanResult(data)
+    } catch (error: any) {
+      console.error(error)
+      const detail = error?.response?.data?.detail || '扫描失败，请检查路径是否正确'
+      message.error(detail)
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const handleApplyScanResult = (mode: 'replace' | 'merge') => {
+    if (!scanResult) return
+    const scannedCategories: EmoteCategory[] = scanResult.categories.map(cat => ({
+      name: cat.name,
+      keywords: cat.keywords || [],
+      weight: cat.weight ?? 1,
+      enabled: cat.enabled ?? true,
+      path: cat.path || '',
+    }))
+
+    if (mode === 'replace') {
+      setConfig(prev => ({
+        ...prev,
+        base_path: scanResult.base_path,
+        categories: scannedCategories,
+      }))
+    } else {
+      // merge: 保留已有分类的关键词和权重配置，新增未有的分类
+      const existingMap = new Map((config.categories || []).map(c => [c.name, c]))
+      const merged: EmoteCategory[] = scannedCategories.map(scanned => {
+        const existing = existingMap.get(scanned.name)
+        if (existing) {
+          // 保留已有配置，只更新路径
+          return { ...existing, path: scanned.path }
+        }
+        return scanned
+      })
+      setConfig(prev => ({
+        ...prev,
+        base_path: scanResult.base_path,
+        categories: merged,
+      }))
+    }
+
+    setScanModalVisible(false)
+    setScanResult(null)
+    message.success(`已${mode === 'replace' ? '替换' : '合并'}应用扫描结果，记得点击"保存配置"生效`)
+  }
+
   const getCategoryStat = (name: string) => categoryInfo.find(item => item.name === name)
 
   return (
@@ -206,6 +275,9 @@ const EmotePage: React.FC = () => {
             <div>
               <Space size="small">
                 <Button icon={<ReloadOutlined />} onClick={handleReload}>重新扫描目录</Button>
+                <Button icon={<FolderOpenOutlined />} onClick={() => { setScanPath(config.base_path || ''); setScanModalVisible(true) }}>
+                  从文件夹导入
+                </Button>
                 <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存配置</Button>
               </Space>
             </div>
@@ -308,6 +380,78 @@ const EmotePage: React.FC = () => {
           )
         })}
       </Space>
+
+      {/* 扫描文件夹弹窗 */}
+      <Modal
+        title="从文件夹导入表情包分类"
+        open={scanModalVisible}
+        onCancel={() => { setScanModalVisible(false); setScanResult(null) }}
+        footer={null}
+        width={640}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size="middle">
+          <Alert
+            type="info"
+            message="输入表情包文件夹的路径，系统会自动扫描所有子文件夹并识别为表情包分类。支持绝对路径和相对路径（相对于项目根目录）。"
+            showIcon
+          />
+          <Space.Compact style={{ width: '100%' }}>
+            <Input
+              placeholder="例如：/home/user/emotes 或 data/emotes"
+              value={scanPath}
+              onChange={(e) => setScanPath(e.target.value)}
+              onPressEnter={handleScanFolder}
+            />
+            <Button type="primary" loading={scanning} onClick={handleScanFolder} icon={<FolderOpenOutlined />}>
+              扫描
+            </Button>
+          </Space.Compact>
+
+          {scanResult && (
+            <>
+              <Alert
+                type="success"
+                message={`扫描完成：发现 ${scanResult.total_categories} 个分类，共 ${scanResult.total_files} 个文件`}
+                showIcon
+              />
+              <div style={{ maxHeight: 300, overflow: 'auto' }}>
+                {scanResult.categories.map((cat) => (
+                  <Card key={cat.name} size="small" style={{ marginBottom: 8 }}>
+                    <Row justify="space-between" align="middle">
+                      <Col>
+                        <Text strong>{cat.name}</Text>
+                        <Text type="secondary" style={{ marginLeft: 8 }}>
+                          {cat.file_count} 个文件
+                        </Text>
+                      </Col>
+                      <Col>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {(cat.sample_files || []).slice(0, 3).join(', ')}
+                        </Text>
+                      </Col>
+                    </Row>
+                  </Card>
+                ))}
+              </div>
+              <Row gutter={12}>
+                <Col>
+                  <Button type="primary" onClick={() => handleApplyScanResult('replace')}>
+                    替换当前配置
+                  </Button>
+                </Col>
+                <Col>
+                  <Button onClick={() => handleApplyScanResult('merge')}>
+                    合并到当前配置
+                  </Button>
+                </Col>
+              </Row>
+              <Text type="secondary">
+                替换：清空现有分类，使用扫描结果。合并：保留已有分类的关键词和权重，新增扫描到的分类。
+              </Text>
+            </>
+          )}
+        </Space>
+      </Modal>
     </Card>
   )
 }

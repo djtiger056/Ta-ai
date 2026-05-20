@@ -168,3 +168,71 @@ async def get_default_prompt(token: str = Depends(get_access_token)):
         "content": config.system_prompt or "",
         "source": "global_config",
     }
+
+
+# ---- system_rules 接口 ----
+
+class GetRulesResponse(BaseModel):
+    """获取功能协议响应"""
+    content: str = Field(description="当前生效的功能协议内容")
+    is_custom: bool = Field(description="是否为用户自定义（非全局默认）")
+
+
+class UpdateRulesRequest(BaseModel):
+    """更新功能协议请求"""
+    content: str = Field(description="新的功能协议内容")
+    source: str = Field(default="user", description="变更来源")
+
+
+@router.get("/rules", response_model=GetRulesResponse)
+async def get_rules(token: str = Depends(get_access_token)):
+    """获取当前用户生效的功能协议"""
+    username = await _get_username_from_token(token)
+    user_rules = prompt_manager.get_rules(username)
+    effective = prompt_manager.get_effective_rules(username)
+    return GetRulesResponse(
+        content=effective,
+        is_custom=user_rules is not None,
+    )
+
+
+@router.put("/rules", response_model=UpdatePromptResponse)
+async def update_rules(
+    request: UpdateRulesRequest,
+    token: str = Depends(get_access_token),
+):
+    """更新当前用户的功能协议"""
+    username = await _get_username_from_token(token)
+    success = prompt_manager.set_rules(
+        username=username,
+        content=request.content,
+        source=request.source,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="功能协议更新失败",
+        )
+    return UpdatePromptResponse(success=True, content=request.content, message="功能协议已更新")
+
+
+@router.delete("/rules")
+async def reset_rules(token: str = Depends(get_access_token)):
+    """重置功能协议为全局默认（删除用户独立配置）"""
+    username = await _get_username_from_token(token)
+    prompt_manager.delete_rules(username)
+    return {
+        "success": True,
+        "message": "已重置为全局默认功能协议",
+        "default_rules_preview": (config.system_rules or "")[:200],
+    }
+
+
+@router.get("/rules/default")
+async def get_default_rules(token: str = Depends(get_access_token)):
+    """获取全局默认功能协议（只读，供参考）"""
+    _ = await _get_username_from_token(token)
+    return {
+        "content": config.system_rules or "",
+        "source": "global_config",
+    }

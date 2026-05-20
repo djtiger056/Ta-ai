@@ -1,5 +1,7 @@
 import asyncio
+import os
 import sys
+import threading
 import uvicorn
 from pathlib import Path
 from typing import Optional
@@ -7,6 +9,23 @@ from typing import Optional
 # Use selector loop on Windows to avoid Proactor connection reset noise.
 if sys.platform.startswith("win"):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
+def ensure_utf8_output() -> None:
+    """确保通过任意入口启动时控制台输出都优先使用 UTF-8。"""
+    os.environ.setdefault("PYTHONUTF8", "1")
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+ensure_utf8_output()
 
 # 添加项目根目录到 Python 路径
 project_root = Path(__file__).parent.parent
@@ -49,6 +68,9 @@ from backend.user import user_manager
 
 # 创建 FastAPI 应用
 app = FastAPI(title="LFBot API", version="1.0.0")
+
+_adapter_thread: Optional[threading.Thread] = None
+_adapter_thread_lock = threading.Lock()
 
 # 添加 CORS 中间件
 # - 开发模式下允许 localhost/127.0.0.1 任意端口，避免 Vite 端口变化导致预检(OPTIONS) 400
@@ -110,6 +132,41 @@ async def root(request: Request):
     if "text/html" in accept and _frontend_dist.is_dir():
         return FileResponse(str(_frontend_dist / "index.html"))
     return {"message": "LFBot API Server"}
+
+
+def _start_adapters_in_background() -> bool:
+    """确保适配器后台线程在当前进程中只启动一次。"""
+    global _adapter_thread
+
+    with _adapter_thread_lock:
+        if _adapter_thread and _adapter_thread.is_alive():
+            return False
+
+        print("Starting adapters in background thread...")
+        _adapter_thread = threading.Thread(
+            target=lambda: asyncio.run(start_adapters()),
+            name="lfbot-adapters",
+            daemon=True,
+        )
+        _adapter_thread.start()
+        return True
+
+
+@app.on_event("startup")
+async def on_startup():
+    """无论通过哪种入口启动，都自动拉起适配器线程。"""
+    if _start_adapters_in_background():
+        print("✓ 适配器后台线程已启动")
+    else:
+        print("ℹ️ 适配器后台线程已在运行，跳过重复启动")
+
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    """记录关闭流程，后台线程会随进程退出。"""
+    thread = _adapter_thread
+    if thread and thread.is_alive():
+        print("ℹ️ FastAPI 正在关闭，适配器后台线程将随进程退出")
 
 
 # ---- 前端静态文件服务 ----
@@ -290,10 +347,10 @@ async def start_adapters():
                 if channel == "linyu_private" and linyu_adapter:
                     await linyu_adapter._send_text_once(user, text, is_group=False)
                 elif channel == "qq_private" and qq_adapter:
-                    await qq_adapter.send_private_message(user, text)
+                    await qq_adapter._send_raw_private_message(user, text)
                 elif channel == "qq_group" and qq_adapter:
                     group = target.get("session_id", user)
-                    await qq_adapter.send_group_message(group, text)
+                    await qq_adapter._send_raw_group_message(group, text)
                 elif proactive_scheduler:
                     # 降级到 web 队列
                     await proactive_scheduler.enqueue_web_message(target, payload)
@@ -335,14 +392,6 @@ async def start_adapters():
 
 
 if __name__ == "__main__":
-    import threading
-
-    print("Starting adapters in background thread...")
-    # 在后台线程启动适配器
-    adapter_thread = threading.Thread(target=lambda: asyncio.run(start_adapters()))
-    adapter_thread.daemon = True
-    adapter_thread.start()
-
     print("Starting FastAPI server...")
     # 启动 FastAPI 服务器
     server_config = config.server_config

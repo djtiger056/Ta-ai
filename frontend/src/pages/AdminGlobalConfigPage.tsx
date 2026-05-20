@@ -3,7 +3,7 @@ import {
   Card, Form, Input, Button, message, Tabs, Switch,
   InputNumber, Select, Spin, Alert, Divider, Row, Col, Tag, Space,
 } from 'antd';
-import { SaveOutlined, ReloadOutlined, GlobalOutlined } from '@ant-design/icons';
+import { SaveOutlined, ReloadOutlined, GlobalOutlined, FileTextOutlined, ToolOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { TextArea } = Input;
@@ -63,6 +63,9 @@ const AdminGlobalConfigPage: React.FC = () => {
       }
       if (formValues.system_prompt !== undefined) {
         payload.system_prompt = formValues.system_prompt;
+      }
+      if (formValues.system_rules !== undefined) {
+        payload.system_rules = formValues.system_rules;
       }
       if (formValues.adapters) {
         payload.adapters = deepMerge(rawConfig?.adapters ?? {}, formValues.adapters);
@@ -160,14 +163,63 @@ const AdminGlobalConfigPage: React.FC = () => {
               // ── 系统提示词 ────────────────────────────────────────
               {
                 key: 'prompt',
-                label: '系统提示词',
+                label: '提示词',
                 children: (
-                  <Form.Item name="system_prompt" label="默认系统提示词">
-                    <TextArea
-                      rows={15}
-                      placeholder="输入默认的系统提示词，用户未自定义时将使用此提示词"
-                    />
-                  </Form.Item>
+                  <Tabs
+                    defaultActiveKey="persona"
+                    size="small"
+                    items={[
+                      {
+                        key: 'persona',
+                        label: <span><FileTextOutlined /> 人设提示词</span>,
+                        children: (
+                          <>
+                            <Alert
+                              message="人设提示词（全局默认）"
+                              description="定义 AI 的角色、性格、世界观、语言风格和行为准则。用户未自定义时使用此默认值。"
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 16 }}
+                            />
+                            <Form.Item name="system_prompt" label="默认人设提示词">
+                              <TextArea
+                                rows={16}
+                                placeholder="输入默认的人设提示词，用户未自定义时将使用此提示词"
+                                style={{ fontFamily: 'monospace', fontSize: 13 }}
+                              />
+                            </Form.Item>
+                          </>
+                        ),
+                      },
+                      {
+                        key: 'rules',
+                        label: <span><ToolOutlined /> 功能协议</span>,
+                        children: (
+                          <>
+                            <Alert
+                              message="功能协议（全局默认）"
+                              description={
+                                <span>
+                                  定义 AI 可使用的功能指令，如图片发送 <code>[GEN_IMG:]</code>、语音 <code>[TTS]</code>、任务委派 <code>[DELEGATE:]</code> 等。
+                                  与人设分离，用户可独立覆盖。
+                                </span>
+                              }
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 16 }}
+                            />
+                            <Form.Item name="system_rules" label="默认功能协议">
+                              <TextArea
+                                rows={16}
+                                placeholder="输入默认的功能协议，留空则不注入任何功能协议"
+                                style={{ fontFamily: 'monospace', fontSize: 13 }}
+                              />
+                            </Form.Item>
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
                 ),
               },
 

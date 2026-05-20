@@ -2,6 +2,15 @@
 
 负责将各种上下文源（记忆、MCP、companion hint、时间连续性感知等）注入到 enhanced_history 中，
 供 LLM 调用使用。从 bot.py 中提取，消除 chat/chat_stream/generate_proactive_reply 的重复代码。
+
+消息结构（双 system 设计）：
+  ① system（人设层）   — 来自 system_prompt，静态，每轮不变
+  ② system（协议层）   — 来自 system_rules，功能协议，静态，每轮不变
+  ③ user/assistant     — 历史消息（含时间标记前缀），连续排列
+  ④ user               — 当前消息
+
+动态上下文（时间感知、记忆、MCP、伴侣模式提示）追加到 ① 的末尾，
+保持历史消息和当前消息的连续性不被打断。
 """
 
 from __future__ import annotations
@@ -86,6 +95,12 @@ class ContextBuilder:
     ) -> List[Dict[str, Any]]:
         """构建增强的对话历史。
 
+        最终 messages 结构：
+          [0] system（人设层 + 动态上下文）
+          [1] system（功能协议层，仅在有内容时插入）
+          [2..N-1] user/assistant 历史消息（含时间标记前缀）
+          [N] user 当前消息
+
         Args:
             message: 当前用户消息（或主动聊天的 instruction）
             user_id: 用户 ID
@@ -98,20 +113,22 @@ class ContextBuilder:
         """
         enhanced_history = copy.deepcopy(history)
 
+        # ── 动态上下文：全部追加到 system[0]（人设层）末尾 ──────────────────
+
         # 0. 时间连续性感知（最高优先级，让 AI 知道对话间隔和时段变化）
         time_continuity_hint = self._build_time_continuity_hint(history)
         if time_continuity_hint:
-            self._inject_system_content(enhanced_history, time_continuity_hint)
+            self._append_to_persona_system(enhanced_history, time_continuity_hint)
 
         # 1. 同类问题间隔较久时按"新一轮近况"处理
         long_gap_repeat_hint = self._bot._build_long_gap_repeat_hint(history, message)
         if long_gap_repeat_hint:
-            self._inject_system_content(enhanced_history, long_gap_repeat_hint)
+            self._append_to_persona_system(enhanced_history, long_gap_repeat_hint)
 
         # 2. 降低问答机器人感：按概率提示"主动分享一点自己的状态/关系感受"
         companion_hint = self._bot._build_companion_mode_hint(session_id, history, message)
         if companion_hint:
-            self._inject_system_content(enhanced_history, companion_hint)
+            self._append_to_persona_system(enhanced_history, companion_hint)
 
         # 3. 从 MCP 扩展收集自动上下文（例如当前时间）
         mcp_blocks = await self._collect_mcp_context(message)
@@ -119,7 +136,7 @@ class ContextBuilder:
             mcp_context = "以下是 MCP 提供的实时上下文：\n" + "\n".join(
                 f"- {block}" for block in mcp_blocks
             )
-            self._inject_system_content(enhanced_history, mcp_context)
+            self._append_to_persona_system(enhanced_history, mcp_context)
 
         # 4. 注入中期摘要上下文（可配置条数）
         await self._bot._append_mid_term_context(enhanced_history, user_id, session_id)
@@ -128,17 +145,21 @@ class ContextBuilder:
         if relevant_memories:
             memory_context = self._bot._build_memory_context(relevant_memories, history, limit=3)
             if memory_context:
-                self._inject_system_content(enhanced_history, memory_context)
+                self._append_to_persona_system(enhanced_history, memory_context)
 
-        # 6. 为历史消息插入时间标记（第二层：让 LLM 看到对话中的时间流逝）
+        # ── 功能协议层：作为独立的第二条 system 消息插入历史之前 ──────────────
+
+        # 6. 注入功能协议（视觉/语音/委派协议，与人设分离）
+        self._inject_rules_system(enhanced_history, user_id)
+
+        # ── 历史消息处理 ────────────────────────────────────────────────────
+
+        # 7. 为历史消息插入时间标记（让 LLM 看到对话中的时间流逝）
         self._inject_time_markers(enhanced_history)
 
-        # 7. 注入 TTS 语音能力提示（让 AI 知道自己可以主动发语音）
-        tts_hint = self._build_tts_capability_hint()
-        if tts_hint:
-            self._inject_system_content(enhanced_history, tts_hint)
+        # ── 当前消息 ─────────────────────────────────────────────────────────
 
-        # 8. 添加当前用户消息
+        # 8. 添加当前用户消息（紧接历史消息，保持对话连续性）
         enhanced_history.append({
             "role": "user",
             "content": message,
@@ -146,7 +167,67 @@ class ContextBuilder:
 
         return enhanced_history
 
-    # ---- 第一层：对话间隔感知 ----
+    # ── 功能协议注入 ──────────────────────────────────────────────────────────
+
+    def _inject_rules_system(
+        self,
+        enhanced_history: List[Dict[str, Any]],
+        user_id: str,
+    ) -> None:
+        """将功能协议作为独立的第二条 system 消息插入。
+
+        插入位置：所有 system 消息之后、第一条非 system 消息之前。
+        如果 system_rules 为空则不插入，避免产生空 system 消息。
+        """
+        rules = self._bot._user_cache.get_system_rules(user_id)
+        if not rules or not rules.strip():
+            return
+
+        # 找到第一条非 system 消息的位置
+        insert_pos = 0
+        for i, msg in enumerate(enhanced_history):
+            if msg.get("role") != "system":
+                insert_pos = i
+                break
+        else:
+            # 全是 system 消息（极少见），追加到末尾
+            insert_pos = len(enhanced_history)
+
+        enhanced_history.insert(insert_pos, {
+            "role": "system",
+            "content": rules.strip(),
+        })
+
+    # ── 动态上下文注入（追加到人设 system 末尾）────────────────────────────────
+
+    @staticmethod
+    def _append_to_persona_system(
+        enhanced_history: List[Dict[str, Any]],
+        content: str,
+    ) -> None:
+        """将动态上下文追加到第一条 system 消息（人设层）末尾。
+
+        如果历史中没有 system 消息，则插入一条新的。
+        注意：此方法只操作第一条 system 消息，不影响后续的功能协议 system 消息。
+        """
+        if enhanced_history and enhanced_history[0].get("role") == "system":
+            enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + content
+        else:
+            enhanced_history.insert(0, {
+                "role": "system",
+                "content": content,
+            })
+
+    # 向后兼容别名（_append_mid_term_context 内部仍调用此方法）
+    @staticmethod
+    def _inject_system_content(
+        enhanced_history: List[Dict[str, Any]],
+        content: str,
+    ) -> None:
+        """向后兼容：等同于 _append_to_persona_system。"""
+        ContextBuilder._append_to_persona_system(enhanced_history, content)
+
+    # ── 第一层：对话间隔感知 ──────────────────────────────────────────────────
 
     def _build_time_continuity_hint(self, history: List[Dict[str, Any]]) -> str:
         """构建时间连续性感知提示。
@@ -254,31 +335,7 @@ class ContextBuilder:
 
         return "\n".join(parts)
 
-    # ---- TTS 语音能力提示 ----
-
-    def _build_tts_capability_hint(self) -> str:
-        """构建 TTS 语音能力提示。
-
-        如果主提示词中已包含语音协议说明，则不再重复注入。
-        仅在 TTS 启用且主提示词未提及时作为兜底。
-        """
-        bot = self._bot
-        tts_manager = getattr(bot, 'tts_manager', None)
-        if not tts_manager:
-            return ""
-        if not tts_manager.config.enabled:
-            return ""
-
-        # 检查系统提示词是否已包含 TTS 说明，避免重复
-        system_prompt = getattr(bot, 'system_prompt', "") or ""
-        if "[TTS]" in system_prompt or "语音协议" in system_prompt:
-            return ""
-
-        return (
-            "【语音能力】你可以用 [TTS]内容[/TTS] 发语音，适合撒娇、晚安等语气重要的短句，偶尔用即可。"
-        )
-
-    # ---- 第二层：历史消息时间标记 ----
+    # ── 第二层：历史消息时间标记 ──────────────────────────────────────────────
 
     def _inject_time_markers(self, enhanced_history: List[Dict[str, Any]]) -> None:
         """在间隔较大的历史消息之间插入时间标记。
@@ -300,7 +357,6 @@ class ContextBuilder:
             return
 
         # 从后往前遍历，找到需要插入时间标记的位置
-        # （从后往前是为了不影响前面的索引）
         insertions: List[tuple] = []  # (index, marker_text)
         prev_ts: Optional[datetime] = None
 
@@ -308,12 +364,10 @@ class ContextBuilder:
             if prev_ts is not None and role == "user":
                 gap_minutes = (ts - prev_ts).total_seconds() / 60
                 if gap_minutes >= 30:
-                    # 生成时间标记
                     period = _get_time_period(ts)
                     time_str = ts.strftime("%H:%M")
 
                     if gap_minutes >= 1440:
-                        # 跨天
                         date_str = ts.strftime("%m/%d")
                         marker = f"—— {date_str} {period} {time_str} ——"
                     else:
@@ -324,11 +378,10 @@ class ContextBuilder:
 
         # 从后往前插入标记（避免索引偏移）
         for msg_idx, marker in reversed(insertions):
-            # 将时间标记作为前缀添加到该用户消息的 content 中
             original_content = str(enhanced_history[msg_idx].get("content", "") or "")
             enhanced_history[msg_idx]["content"] = f"{marker}\n{original_content}"
 
-    # ---- 工具方法 ----
+    # ── 工具方法 ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _parse_timestamp(message: Dict[str, Any]) -> Optional[datetime]:
@@ -355,14 +408,3 @@ class ContextBuilder:
         except Exception as e:
             print(f"[DEBUG] 检索 MCP 自动上下文失败: {e}")
             return []
-
-    @staticmethod
-    def _inject_system_content(enhanced_history: List[Dict[str, Any]], content: str) -> None:
-        """将内容追加到 system 消息中（如果存在），否则插入新的 system 消息。"""
-        if enhanced_history and enhanced_history[0].get("role") == "system":
-            enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + content
-        else:
-            enhanced_history.insert(0, {
-                "role": "system",
-                "content": content,
-            })

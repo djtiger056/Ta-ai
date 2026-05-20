@@ -18,6 +18,7 @@ from backend.config import config
 logger = logging.getLogger(__name__)
 
 PROMPT_FILE = "system_prompt.md"
+RULES_FILE = "system_rules.md"
 HISTORY_FILE = "prompt_history.json"
 MAX_HISTORY_RECORDS = 50  # 最多保留最近 50 条变更记录
 
@@ -32,6 +33,11 @@ class PromptManager:
         """获取用户提示词文件路径"""
         user_dir = user_data_manager._get_user_dir(username)
         return user_dir / PROMPT_FILE
+
+    def _get_rules_path(self, username: str) -> Path:
+        """获取用户功能协议文件路径"""
+        user_dir = user_data_manager._get_user_dir(username)
+        return user_dir / RULES_FILE
 
     def _get_history_path(self, username: str) -> Path:
         """获取用户提示词变更历史文件路径"""
@@ -272,6 +278,89 @@ class PromptManager:
         if user_prompt:
             return user_prompt
         return config.system_prompt or ""
+
+    # ---- system_rules（功能协议层）----
+
+    def get_rules(self, username: str) -> Optional[str]:
+        """获取用户的功能协议（system_rules）。
+
+        优先级：
+        1. 用户独立文件 (system_rules.md)
+        2. 返回 None（由调用方决定是否回退到全局配置）
+
+        Args:
+            username: 用户名
+
+        Returns:
+            功能协议内容，如果用户没有独立配置则返回 None
+        """
+        rules_path = self._get_rules_path(username)
+        if not rules_path.exists():
+            return None
+        try:
+            content = rules_path.read_text(encoding="utf-8").strip()
+            return content if content else None
+        except Exception as e:
+            logger.error(f"读取用户功能协议失败 username={username}: {e}")
+            return None
+
+    def set_rules(
+        self,
+        username: str,
+        content: str,
+        source: str = "user",
+        summary: str = "",
+    ) -> bool:
+        """设置用户的功能协议（system_rules）。
+
+        Args:
+            username: 用户名
+            content: 新的功能协议内容
+            source: 变更来源
+            summary: 变更摘要
+
+        Returns:
+            是否成功
+        """
+        try:
+            user_data_manager._ensure_user_dirs(username)
+            rules_path = self._get_rules_path(username)
+            rules_path.write_text(content, encoding="utf-8")
+            logger.info(f"功能协议已更新 username={username} source={source} length={len(content)}")
+            return True
+        except Exception as e:
+            logger.error(f"设置用户功能协议失败 username={username}: {e}")
+            return False
+
+    def delete_rules(self, username: str) -> bool:
+        """删除用户的独立功能协议（回退到全局默认）。"""
+        try:
+            rules_path = self._get_rules_path(username)
+            if rules_path.exists():
+                rules_path.unlink()
+            logger.info(f"功能协议已删除 username={username}")
+            return True
+        except Exception as e:
+            logger.error(f"删除用户功能协议失败 username={username}: {e}")
+            return False
+
+    def get_effective_rules(self, username: str) -> str:
+        """获取用户最终生效的功能协议。
+
+        优先级：
+        1. 用户独立文件 (system_rules.md)
+        2. 全局 config.yaml 中的 system_rules
+
+        Args:
+            username: 用户名
+
+        Returns:
+            最终生效的功能协议，可能为空字符串
+        """
+        user_rules = self.get_rules(username)
+        if user_rules is not None:
+            return user_rules
+        return config.system_rules or ""
 
     def _add_history_record(
         self,

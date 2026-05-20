@@ -666,6 +666,45 @@ export const proactiveApi = {
   }
 }
 
+// 提示词系统 API（人设 + 功能协议，独立于 userConfigApi）
+export const promptApi = {
+  // ── 人设提示词 ──────────────────────────────────────────────────
+  getPrompt: async (): Promise<{ content: string; is_custom: boolean; updated_at?: string; source: string }> => {
+    const response = await api.get('/prompt')
+    return response.data
+  },
+  updatePrompt: async (content: string, summary = ''): Promise<void> => {
+    await api.put('/prompt', { content, source: 'user', summary })
+  },
+  resetPrompt: async (): Promise<void> => {
+    await api.delete('/prompt')
+  },
+  getDefaultPrompt: async (): Promise<string> => {
+    const response = await api.get('/prompt/default')
+    return response.data.content
+  },
+  getPromptHistory: async (limit = 20): Promise<any[]> => {
+    const response = await api.get('/prompt/history', { params: { limit } })
+    return response.data.records
+  },
+
+  // ── 功能协议 ────────────────────────────────────────────────────
+  getRules: async (): Promise<{ content: string; is_custom: boolean }> => {
+    const response = await api.get('/prompt/rules')
+    return response.data
+  },
+  updateRules: async (content: string): Promise<void> => {
+    await api.put('/prompt/rules', { content, source: 'user' })
+  },
+  resetRules: async (): Promise<void> => {
+    await api.delete('/prompt/rules')
+  },
+  getDefaultRules: async (): Promise<string> => {
+    const response = await api.get('/prompt/rules/default')
+    return response.data.content
+  },
+}
+
 export const promptEnhancerApi = {
   getConfig: async (): Promise<PromptEnhancerConfig> => {
     const response = await api.get('/prompt-enhancer/config')
@@ -712,6 +751,16 @@ export const emoteApi = {
   },
   reloadFiles: async (): Promise<{ success: boolean; categories: EmoteCategoryInfo[]; base_path: string }> => {
     const response = await api.post('/emotes/reload')
+    return response.data
+  },
+  scanFolder: async (path: string, fileExtensions?: string[]): Promise<{
+    success: boolean
+    base_path: string
+    categories: EmoteCategoryInfo[]
+    total_categories: number
+    total_files: number
+  }> => {
+    const response = await api.post('/emotes/scan-folder', { path, file_extensions: fileExtensions })
     return response.data
   }
 }

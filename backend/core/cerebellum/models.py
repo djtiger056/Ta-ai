@@ -26,12 +26,12 @@ MOTIVATION_LABELS = {
 }
 
 DEFAULT_BASELINES: Dict[str, float] = {
-    "joy": 0.32,
+    "joy": 0.35,
     "anger": 0.08,
-    "sadness": 0.14,
-    "pleasure": 0.28,
+    "sadness": 0.15,
+    "pleasure": 0.32,
     "surprise": 0.12,
-    "fatigue": 0.22,
+    "fatigue": 0.20,
 }
 
 DEFAULT_CIRCADIAN: Dict[str, Any] = {
@@ -39,7 +39,7 @@ DEFAULT_CIRCADIAN: Dict[str, Any] = {
     "night": {
         "start": "23:00",
         "end": "06:00",
-        "fatigue_baseline": 0.58,
+        "fatigue_baseline": 0.55,
         "baseline_adjustments": {
             "joy": -0.04,
             "pleasure": -0.05,
@@ -48,8 +48,9 @@ DEFAULT_CIRCADIAN: Dict[str, Any] = {
     "active": {
         "start": "08:00",
         "end": "22:00",
-        "micro_wave_probability": 0.35,
-        "micro_wave_amplitude": 0.05,
+        "micro_wave_probability": 0.40,
+        "micro_wave_amplitude": 0.06,
+        "positive_bias": 0.55,
     },
 }
 
@@ -132,11 +133,11 @@ class EmotionState:
 class CerebellumConfigData:
     enabled: bool = False
     tick_interval: int = 30
-    decay_rate: float = 0.015
-    action_threshold: float = 0.68
+    decay_rate: float = 0.008
+    action_threshold: float = 0.52
     persistence_interval: int = 300
     state_file: str = "data/cerebellum_state.json"
-    max_stimulus_step: float = 0.18
+    max_stimulus_step: float = 0.28
     history_limit: int = 2880
     replace_time_windows: bool = True
     motivation_cooldown_seconds: int = 1800
@@ -144,8 +145,18 @@ class CerebellumConfigData:
     circadian: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CIRCADIAN))
     inactivity_stimulus: Dict[str, Any] = field(default_factory=lambda: {
         "enabled": True,
-        "after_seconds": 21600,
-        "intensity": 0.22,
+        "after_seconds": 10800,
+        "intensity": 0.35,
+        "repeat_interval_seconds": 7200,
+        "escalation_factor": 1.15,
+        "max_intensity": 0.65,
+    })
+    autonomous_drift: Dict[str, Any] = field(default_factory=lambda: {
+        "enabled": True,
+        "drift_probability": 0.25,
+        "drift_step": 0.03,
+        "preferred_emotions": ["joy", "pleasure", "sadness"],
+        "sadness_weight_when_inactive": 0.6,
     })
 
     def resolved_state_file(self, project_root: Path) -> Path:
@@ -169,4 +180,5 @@ class CerebellumConfigData:
             "baseline_values": {key: round(clamp(value), 4) for key, value in self.baseline_values.items()},
             "circadian": self.circadian,
             "inactivity_stimulus": self.inactivity_stimulus,
+            "autonomous_drift": self.autonomous_drift,
         }

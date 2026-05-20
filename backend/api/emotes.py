@@ -1,11 +1,18 @@
 from fastapi import APIRouter, HTTPException
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
+from pathlib import Path
+from pydantic import BaseModel
 
 from ..config import config
-from ..emote import EmoteConfig, EmoteManager
+from ..emote import EmoteConfig, EmoteCategory, EmoteManager
 from .bot_provider import get_bot, reset_bot
 
 router = APIRouter(prefix="/api/emotes", tags=["emotes"])
+
+
+class ScanFolderRequest(BaseModel):
+    path: str
+    file_extensions: Optional[List[str]] = None
 
 _fallback_manager: Optional[EmoteManager] = None
 
@@ -76,3 +83,65 @@ async def reload_emote_files():
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重载失败: {str(e)}")
+
+
+@router.post("/scan-folder")
+async def scan_emote_folder(request: ScanFolderRequest):
+    """扫描指定文件夹，自动发现所有子文件夹作为表情包分类"""
+    folder_path = Path(request.path)
+
+    # 支持相对路径（相对于项目根目录）
+    if not folder_path.is_absolute():
+        project_root = Path(__file__).resolve().parent.parent
+        folder_path = (project_root / folder_path).resolve()
+
+    if not folder_path.exists():
+        raise HTTPException(status_code=400, detail=f"路径不存在: {folder_path}")
+    if not folder_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"路径不是文件夹: {folder_path}")
+
+    extensions = request.file_extensions or ["png", "jpg", "jpeg", "gif", "webp"]
+    discovered_categories = []
+
+    try:
+        for sub_dir in sorted(folder_path.iterdir()):
+            if not sub_dir.is_dir():
+                continue
+            # 跳过隐藏文件夹
+            if sub_dir.name.startswith("."):
+                continue
+
+            # 统计该子文件夹中的图片文件数
+            file_count = 0
+            sample_files = []
+            for ext in extensions:
+                for f in sub_dir.glob(f"*.{ext}"):
+                    file_count += 1
+                    if len(sample_files) < 5:
+                        sample_files.append(f.name)
+                for f in sub_dir.glob(f"*.{ext.upper()}"):
+                    file_count += 1
+                    if len(sample_files) < 5:
+                        sample_files.append(f.name)
+
+            discovered_categories.append({
+                "name": sub_dir.name,
+                "path": str(sub_dir),
+                "file_count": file_count,
+                "sample_files": sample_files,
+                "keywords": [],
+                "weight": 1.0,
+                "enabled": True,
+            })
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=f"无权限访问: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"扫描失败: {str(e)}")
+
+    return {
+        "success": True,
+        "base_path": str(folder_path),
+        "categories": discovered_categories,
+        "total_categories": len(discovered_categories),
+        "total_files": sum(c["file_count"] for c in discovered_categories),
+    }
