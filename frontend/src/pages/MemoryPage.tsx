@@ -230,6 +230,12 @@ const MemoryPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    if (!selectedUserId) return
+    searchForm.setFieldsValue({ user_id: selectedUserId })
+    addMemoryForm.setFieldsValue({ user_id: selectedUserId })
+  }, [selectedUserId, searchForm, addMemoryForm])
+
+  useEffect(() => {
     if (activeTab === 'config') {
       loadConfig()
       loadStats()
@@ -989,10 +995,10 @@ const MemoryPage: React.FC = () => {
         <Space>
           <span>选择用户ID:</span>
           <Select
-            style={{ width: 280 }}
+            style={{ width: 420 }}
             value={selectedUserId}
             onChange={setSelectedUserId}
-            options={userIds.map(id => ({ label: `${userInfoMap[id] || id} (${id})`, value: id }))}
+            options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
             placeholder="选择用户"
             showSearch
             filterOption={(input, option) =>
@@ -1015,7 +1021,7 @@ const MemoryPage: React.FC = () => {
                     setUserInfoMap(map)
                   }
                   if (data.user_ids && data.user_ids.length > 0) {
-                    setSelectedUserId(data.user_ids[0])
+                    setSelectedUserId((prev) => (prev && data.user_ids.includes(prev) ? prev : data.user_ids[0]))
                   }
                 } catch (error) {
                   console.error('加载用户ID列表失败:', error)
@@ -1692,8 +1698,15 @@ const MemoryPage: React.FC = () => {
             <Col span={8}>
               <Card title="搜索记忆">
                 <Form form={searchForm} layout="vertical">
-                  <Form.Item label="用户ID" name="user_id" initialValue="web_user">
-                    <Input />
+                  <Form.Item label="选择用户" name="user_id" initialValue={selectedUserId}>
+                    <Select
+                      options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
+                      placeholder="选择用户"
+                      showSearch
+                      filterOption={(input, option) =>
+                        (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                      }
+                    />
                   </Form.Item>
                   <Form.Item label="查询内容" name="query" rules={[{ required: true, message: '请输入查询内容' }]}>
                     <TextArea rows={3} />
@@ -1739,8 +1752,15 @@ const MemoryPage: React.FC = () => {
               
               <Card title="添加长期记忆" style={{ marginTop: 16 }}>
                 <Form form={addMemoryForm} layout="vertical">
-                  <Form.Item label="用户ID" name="user_id" initialValue="web_user">
-                    <Input />
+                  <Form.Item label="选择用户" name="user_id" initialValue={selectedUserId}>
+                    <Select
+                      options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
+                      placeholder="选择用户"
+                      showSearch
+                      filterOption={(input, option) =>
+                        (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                      }
+                    />
                   </Form.Item>
                   <Form.Item label="记忆内容" name="content" rules={[{ required: true, message: '请输入记忆内容' }]}>
                     <TextArea rows={4} />

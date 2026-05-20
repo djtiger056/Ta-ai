@@ -568,7 +568,7 @@ export const memoryApi = {
   },
 
   // 获取用户ID列表
-  getMemoryUsers: async (): Promise<{ user_ids: string[]; user_info?: { user_id: string; display_name: string }[] }> => {
+  getMemoryUsers: async (): Promise<{ user_ids: string[]; user_info?: { user_id: string; display_name: string; selector_key?: string }[] }> => {
     try {
       const response = await api.get('/memory/users')
       return response.data
@@ -877,6 +877,7 @@ export interface UserConfig {
   prompt_enhancer?: Record<string, any>
   emotes?: Record<string, any>
   proactive_chat?: Record<string, any>
+  adapters?: Record<string, any>
   agent_delegate?: Record<string, any>
   preferences?: Record<string, any>
 }

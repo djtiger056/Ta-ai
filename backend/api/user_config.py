@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from backend.user import user_manager, auth_manager
 from backend.api.deps import get_access_token
+from backend.adapters.linyu_manager import get_linyu_session_manager
 
 
 router = APIRouter(prefix="/api", tags=["user_config"])
@@ -19,6 +20,7 @@ class UserConfigResponse(BaseModel):
     prompt_enhancer: Optional[Dict[str, Any]] = None
     emotes: Optional[Dict[str, Any]] = None
     proactive_chat: Optional[Dict[str, Any]] = None
+    adapters: Optional[Dict[str, Any]] = None
     preferences: Optional[Dict[str, Any]] = None
 
 
@@ -32,6 +34,7 @@ class UpdateUserConfigRequest(BaseModel):
     prompt_enhancer: Optional[Dict[str, Any]] = Field(default=None, description="提示词增强配置")
     emotes: Optional[Dict[str, Any]] = Field(default=None, description="表情包配置")
     proactive_chat: Optional[Dict[str, Any]] = Field(default=None, description="主动聊天配置")
+    adapters: Optional[Dict[str, Any]] = Field(default=None, description="适配器配置")
     preferences: Optional[Dict[str, Any]] = Field(default=None, description="其他偏好设置")
 
 
@@ -84,6 +87,8 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
         config_data['emote_config'] = request.emotes
     if request.proactive_chat is not None:
         config_data['proactive_chat_config'] = request.proactive_chat
+    if request.adapters is not None:
+        config_data['adapters'] = request.adapters
     if request.preferences is not None:
         config_data['preferences'] = request.preferences
     
@@ -98,6 +103,9 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
     
     # 返回更新后的配置
     config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
+    manager = get_linyu_session_manager()
+    if manager:
+        manager.request_refresh_user(str(user_info['user_id']))
     
     return UserConfigResponse(**config_dict)
 
@@ -128,8 +136,8 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
     if config_type:
         # 重置指定类型的配置
         valid_types = [
-            'system_prompt', 'llm', 'tts', 'image_generation', 
-            'vision', 'prompt_enhancer', 'emotes', 'proactive_chat', 'preferences'
+            'system_prompt', 'llm', 'tts', 'image_generation',
+            'vision', 'prompt_enhancer', 'emotes', 'proactive_chat', 'adapters', 'preferences'
         ]
         
         if config_type not in valid_types:
@@ -154,6 +162,8 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             config_data['emote_config'] = None
         elif config_type == 'proactive_chat':
             config_data['proactive_chat_config'] = None
+        elif config_type == 'adapters':
+            config_data['adapters'] = None
         elif config_type == 'preferences':
             config_data['preferences'] = None
     else:
@@ -167,6 +177,7 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             'prompt_enhancer_config': None,
             'emote_config': None,
             'proactive_chat_config': None,
+            'adapters': None,
             'preferences': None
         }
     
@@ -178,6 +189,10 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="配置重置失败"
         )
+
+    manager = get_linyu_session_manager()
+    if manager:
+        manager.request_refresh_user(str(user_info['user_id']))
     
     return {"message": "配置重置成功"}
 

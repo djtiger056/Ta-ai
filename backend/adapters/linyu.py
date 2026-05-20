@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import io
 import json
 import math
@@ -8,6 +9,7 @@ import re
 import time
 import traceback
 import wave
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import aiohttp
@@ -29,9 +31,10 @@ class LinyuAdapter:
 
     _sentence_delimiters = {"。", "！", "？", "!", "?"}
 
-    def __init__(self, bot: Bot):
+    def __init__(self, bot: Bot, linyu_config: Optional[Dict[str, Any]] = None, *, owner_user_id: Optional[str] = None):
         self.bot = bot
-        self.linyu_config = config.adapters_config.get("linyu", {})
+        self.owner_user_id = str(owner_user_id) if owner_user_id is not None else None
+        self.linyu_config = copy.deepcopy(linyu_config if linyu_config is not None else config.adapters_config.get("linyu", {}))
 
         # 连接配置
         self.http_host = self.linyu_config.get("http_host", "127.0.0.1")
@@ -45,6 +48,7 @@ class LinyuAdapter:
         self.target_user_id = str(self.linyu_config.get("target_user_id", "")).strip()
         self.target_user_account = str(self.linyu_config.get("target_user_account", "")).strip()
         self.auto_bind_first_user = bool(self.linyu_config.get("auto_bind_first_user", False))
+        self._has_explicit_target = bool(self.target_user_id or self.target_user_account)
 
         # 访问控制配置
         self.access_control_config = self.linyu_config.get("access_control", {})
@@ -94,6 +98,9 @@ class LinyuAdapter:
         self.token: Optional[str] = None
         self.user_id: Optional[str] = None
         self.http_session: Optional[aiohttp.ClientSession] = None
+        self.last_started_at: Optional[float] = None
+        self.last_connected_at: Optional[float] = None
+        self.last_error: Optional[str] = None
 
         # 消息防抖配置
         self.debounce_config = self.linyu_config.get('debounce', {})
@@ -157,6 +164,7 @@ class LinyuAdapter:
             return
 
         self.running = True
+        self.last_started_at = time.time()
         self.reconnect_attempts = 0
 
         while self.running:
@@ -171,6 +179,7 @@ class LinyuAdapter:
             except (websockets.exceptions.ConnectionClosed, ConnectionError, OSError, asyncio.TimeoutError) as e:
                 self.reconnect_attempts += 1
                 error_type = type(e).__name__
+                self.last_error = f"{error_type}: {str(e)}"
                 print(f"❌ Linyu 连接失败 ({error_type}): {str(e)}")
                 if self.reconnect_attempts >= self.max_reconnect_attempts:
                     print(f"⚠️ 已达到最大重连次数 ({self.max_reconnect_attempts})，停止重连")
@@ -181,6 +190,7 @@ class LinyuAdapter:
                 await asyncio.sleep(wait_time)
             except Exception as e:
                 self.reconnect_attempts += 1
+                self.last_error = f"{type(e).__name__}: {str(e)}"
                 print(f"❌ Linyu 连接异常: {str(e)}")
                 if self.reconnect_attempts >= self.max_reconnect_attempts:
                     print(f"⚠️ 已达到最大重连次数 ({self.max_reconnect_attempts})，停止重连")
@@ -273,6 +283,8 @@ class LinyuAdapter:
         except asyncio.TimeoutError:
             raise ConnectionError(f"连接超时 ({self.connect_timeout}秒)")
         print("✅ Linyu WebSocket 连接成功")
+        self.last_connected_at = time.time()
+        self.last_error = None
         self.reconnect_attempts = 0
 
     async def _handle_messages(self):
@@ -334,6 +346,8 @@ class LinyuAdapter:
 
         # 尝试将 Linyu userId 与已绑定账号名的用户关联
         await self._try_resolve_linyu_binding(user_id)
+        bound_user = await self._get_bound_linyu_user(user_id)
+        self._grant_bound_user_whitelist_access(user_id, bound_user)
 
         # 获取消息ID用于去重
         msg_id = str(message.get("id") or message.get("msgId") or message.get("msg_id") or "")
@@ -343,12 +357,15 @@ class LinyuAdapter:
 
         # 单用户模式目标限制
         if not self.target_user_id and self.auto_bind_first_user:
-            self.target_user_id = user_id
-            if self.access_control_enabled and self.access_control_mode == "whitelist":
-                self.access_whitelist.add(user_id)
-            print(f"✅ 自动绑定首个用户为目标: {user_id}")
+            has_explicit_binding = await self._has_any_explicit_linyu_binding()
+            if not has_explicit_binding:
+                self.target_user_id = user_id
+                if self.access_control_enabled and self.access_control_mode == "whitelist":
+                    self.access_whitelist.add(user_id)
+                print(f"✅ 自动绑定首个用户为目标: {user_id}")
 
-        if self.target_user_id and user_id != self.target_user_id:
+        allow_bound_user_override = self._should_allow_bound_user_target_override(bound_user)
+        if self.target_user_id and user_id != self.target_user_id and not allow_bound_user_override:
             print(f"ℹ️ 忽略非目标用户消息: {user_id} (target={self.target_user_id})")
             return
 
@@ -1645,6 +1662,27 @@ class LinyuAdapter:
         prefix, token = url.split("x-token=", 1)
         return f"{prefix}x-token={self._mask_token(token)}"
 
+    def get_runtime_status(self) -> Dict[str, Any]:
+        return {
+            "owner_user_id": self.owner_user_id,
+            "enabled": bool(self.account and self.password),
+            "running": self.running,
+            "connected": self.websocket is not None,
+            "login_account": self.account,
+            "self_user_id": self.user_id,
+            "target_user_id": self.target_user_id,
+            "target_user_account": self.target_user_account,
+            "auto_bind_first_user": self.auto_bind_first_user,
+            "reconnect_attempts": self.reconnect_attempts,
+            "last_started_at": datetime.fromtimestamp(self.last_started_at).isoformat() if self.last_started_at else None,
+            "last_connected_at": datetime.fromtimestamp(self.last_connected_at).isoformat() if self.last_connected_at else None,
+            "last_error": self.last_error,
+            "http_host": self.http_host,
+            "http_port": self.http_port,
+            "ws_host": self.ws_host,
+            "ws_port": self.ws_port,
+        }
+
     async def _mark_read(self, target_id: str):
         try:
             await self._request_json("GET", f"/v1/api/chat-list/read/{target_id}")
@@ -1762,6 +1800,36 @@ class LinyuAdapter:
         except Exception as e:
             # 解析失败不影响正常消息处理
             pass
+
+    async def _get_bound_linyu_user(self, linyu_user_id: str):
+        from ..user import user_manager
+        try:
+            return await user_manager.get_user_by_linyu_id(linyu_user_id)
+        except Exception:
+            return None
+
+    async def _has_any_explicit_linyu_binding(self) -> bool:
+        from ..user import user_manager
+        try:
+            return await user_manager.has_any_linyu_binding()
+        except Exception:
+            return False
+
+    def _should_allow_bound_user_target_override(self, bound_user: Optional[Any]) -> bool:
+        return bool(
+            bound_user
+            and self.auto_bind_first_user
+            and not self._has_explicit_target
+        )
+
+    def _grant_bound_user_whitelist_access(self, user_id: str, bound_user: Optional[Any]):
+        if (
+            not self._should_allow_bound_user_target_override(bound_user)
+            or not self.access_control_enabled
+            or self.access_control_mode != "whitelist"
+        ):
+            return
+        self.access_whitelist.add(user_id)
 
     async def _get_account_by_user_id(self, target_user_id: str) -> Optional[str]:
         """通过 Linyu API 查询用户 ID 对应的账号名"""

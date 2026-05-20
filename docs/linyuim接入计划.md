@@ -98,11 +98,11 @@ adapters:
     ws_host: your-linyu-server.com
     ws_port: 9100                      # WebSocket 端口
     
-    # AI 伴侣账号（手动在 linyu 中注册）
+    # AI 伴侣账号（机器人登录用，手动在 linyu 中注册）
     account: "ai_companion"
     password: "your_password"
     
-    # 目标用户（你的 linyu 用户 ID）
+    # 聊天对象（你的 linyu 用户 ID）
     target_user_id: "your_user_id"
     
     # 访问控制（单用户模式）

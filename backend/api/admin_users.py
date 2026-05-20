@@ -57,6 +57,7 @@ class AdminUpdateUserConfigRequest(BaseModel):
     prompt_enhancer: Optional[Dict[str, Any]] = None
     emotes: Optional[Dict[str, Any]] = None
     proactive_chat: Optional[Dict[str, Any]] = None
+    adapters: Optional[Dict[str, Any]] = None
     preferences: Optional[Dict[str, Any]] = None
 
 
@@ -70,6 +71,7 @@ def _build_global_config() -> Dict[str, Any]:
         "emotes": global_config.emote_config.dict() if hasattr(global_config.emote_config, "dict") else {},
         "prompt_enhancer": global_config.prompt_enhancer_config.dict() if hasattr(global_config.prompt_enhancer_config, "dict") else {},
         "proactive_chat": global_config.proactive_chat_config,
+        "adapters": global_config.adapters_config,
     }
 
 
@@ -174,6 +176,8 @@ async def update_user_config(user_key: str, request: AdminUpdateUserConfigReques
         config_data["emote_config"] = request.emotes
     if request.proactive_chat is not None:
         config_data["proactive_chat_config"] = request.proactive_chat
+    if request.adapters is not None:
+        config_data["adapters"] = request.adapters
     if request.preferences is not None:
         config_data["preferences"] = request.preferences
 
@@ -267,5 +271,4 @@ async def get_user_storage_stats(user_key: str):
         "username": user.username,
         "storage": stats
     }
-
 

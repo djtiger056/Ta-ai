@@ -11,7 +11,8 @@ import {
   Modal,
   Popconfirm,
   Tag,
-  Tooltip
+  Tooltip,
+  Select
 } from 'antd'
 import { 
   EditOutlined, 
@@ -39,10 +40,35 @@ const MemoryManagePage: React.FC = () => {
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [editingMemory, setEditingMemory] = useState<MemoryItem | null>(null)
   const [userId, setUserId] = useState<string>('')
+  const [userIds, setUserIds] = useState<string[]>([])
+  const [userInfoMap, setUserInfoMap] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    const loadUserIds = async () => {
+      try {
+        const data = await memoryApi.getMemoryUsers()
+        const ids = data.user_ids || []
+        setUserIds(ids)
+        if (data.user_info && Array.isArray(data.user_info)) {
+          const map: Record<string, string> = {}
+          for (const info of data.user_info) {
+            map[info.user_id] = info.display_name || info.user_id
+          }
+          setUserInfoMap(map)
+        }
+        if (ids.length > 0) {
+          setUserId((prev) => prev || ids[0])
+        }
+      } catch (error) {
+        console.error('加载用户列表失败:', error)
+      }
+    }
+    loadUserIds()
+  }, [])
 
   const loadMemories = async () => {
     if (!userId) {
-      message.warning('请输入用户ID')
+      message.warning('请选择用户')
       return
     }
     try {
@@ -169,11 +195,16 @@ const MemoryManagePage: React.FC = () => {
     <div style={{ padding: '24px' }}>
       <Card title="记忆管理">
         <Space style={{ marginBottom: 16 }}>
-          <Input
-            placeholder="输入用户ID"
+          <Select
+            placeholder="选择用户"
             value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-            style={{ width: 200 }}
+            onChange={setUserId}
+            style={{ width: 420 }}
+            options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
+            showSearch
+            filterOption={(input, option) =>
+              (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+            }
           />
           <Button type="primary" icon={<ReloadOutlined />} onClick={loadMemories} loading={loading}>
             加载记忆

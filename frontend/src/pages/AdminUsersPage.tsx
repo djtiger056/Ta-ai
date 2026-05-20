@@ -55,6 +55,7 @@ const AdminUsersPage: React.FC = () => {
     deny_message: '抱歉，你没有权限使用此机器人。'
   })
   const [accessControlLoading, setAccessControlLoading] = useState(false)
+  const [linyuSessions, setLinyuSessions] = useState<Record<string, any>>({})
 
   const loadUsers = async () => {
     setLoading(true)
@@ -77,6 +78,31 @@ const AdminUsersPage: React.FC = () => {
       message.error(e.response?.data?.detail || '加载访问控制配置失败')
     } finally {
       setAccessControlLoading(false)
+    }
+  }
+
+  const loadLinyuSessions = async () => {
+    try {
+      const resp = await api.get('/admin/linyu-sessions')
+      setLinyuSessions(resp.data.sessions || {})
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '加载 Linyu 会话状态失败')
+    }
+  }
+
+  const refreshLinyuSession = async (userId?: number) => {
+    try {
+      if (userId) {
+        await api.post(`/admin/linyu-sessions/${userId}/refresh`)
+      } else {
+        await api.post('/admin/linyu-sessions/refresh')
+      }
+      message.success(userId ? `已提交用户 ${userId} 的 Linyu 会话热重载` : '已提交全部 Linyu 会话热重载')
+      window.setTimeout(() => {
+        loadLinyuSessions()
+      }, 1200)
+    } catch (e: any) {
+      message.error(e.response?.data?.detail || '提交 Linyu 热重载失败')
     }
   }
 
@@ -216,6 +242,7 @@ const AdminUsersPage: React.FC = () => {
 
   useEffect(() => {
     loadUsers()
+    loadLinyuSessions()
   }, [])
 
   const handleTabChange = (key: string) => {
@@ -247,6 +274,12 @@ const AdminUsersPage: React.FC = () => {
           <Space wrap>
             <Button type="primary" loading={loading} onClick={loadUsers}>
               刷新用户列表
+            </Button>
+            <Button onClick={loadLinyuSessions}>
+              刷新 Linyu 状态
+            </Button>
+            <Button onClick={() => refreshLinyuSession()}>
+              热重载全部 Linyu 会话
             </Button>
             <Button icon={<PlusOutlined />} onClick={() => setAddUserModalOpen(true)}>
               添加QQ用户
@@ -280,6 +313,36 @@ const AdminUsersPage: React.FC = () => {
                       dataIndex: 'qq_user_id', 
                       width: 140,
                       render: (qq) => qq ? <Tag color="blue">{qq}</Tag> : <Text type="secondary">未绑定</Text>
+                    },
+                    {
+                      title: 'Linyu 会话',
+                      dataIndex: 'id',
+                      width: 240,
+                      render: (id: number) => {
+                        const session = linyuSessions[String(id)]
+                        if (!session) {
+                          return <Text type="secondary">未启用</Text>
+                        }
+                        return (
+                          <Space direction="vertical" size={2}>
+                            <Space size={6}>
+                              <Badge status={session.connected ? 'success' : (session.running ? 'processing' : 'default')} />
+                              <Text>{session.connected ? '已连接' : (session.running ? '启动中' : '未连接')}</Text>
+                            </Space>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              AI: {session.login_account || '未配置'}
+                            </Text>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              对象: {session.target_user_account || session.target_user_id || '未配置'}
+                            </Text>
+                            {session.last_error ? (
+                              <Tooltip title={session.last_error}>
+                                <Text type="danger" style={{ fontSize: 12 }}>最近错误</Text>
+                              </Tooltip>
+                            ) : null}
+                          </Space>
+                        )
+                      }
                     },
                     { 
                       title: '昵称', 
@@ -331,6 +394,12 @@ const AdminUsersPage: React.FC = () => {
                             onClick={() => openConfigEditor(record)}
                           >
                             编辑配置
+                          </Button>
+                          <Button
+                            size="small"
+                            onClick={() => refreshLinyuSession(record.id)}
+                          >
+                            重载 Linyu
                           </Button>
                           <Popconfirm
                             title="确认删除"

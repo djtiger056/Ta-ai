@@ -292,7 +292,7 @@ const SettingsPage: React.FC = () => {
                   {({ getFieldValue }) =>
                     getFieldValue(['adapters', 'qq', 'enabled']) ? (
                       <>
-                        <Divider orientation="left" plain style={{ marginTop: 8 }}>连接配置</Divider>
+                        <Divider  plain style={{ marginTop: 8 }}>连接配置</Divider>
                         <Row gutter={16}>
                           <Col span={16}>
                             <Form.Item name={['adapters', 'qq', 'ws_host']} label="WebSocket 地址" help="NapCat 监听地址">
@@ -317,7 +317,7 @@ const SettingsPage: React.FC = () => {
                           <Switch checkedChildren="需要" unCheckedChildren="不需要" />
                         </Form.Item>
 
-                        <Divider orientation="left" plain>分段发送</Divider>
+                        <Divider  plain>分段发送</Divider>
                         <Form.Item
                           name={['adapters', 'qq', 'segment_config', 'enabled']}
                           label="启用分段发送"
@@ -368,7 +368,7 @@ const SettingsPage: React.FC = () => {
                           </Col>
                         </Row>
 
-                        <Divider orientation="left" plain>消息防抖（合并）</Divider>
+                        <Divider  plain>消息防抖（合并）</Divider>
                         <Form.Item
                           name={['adapters', 'qq', 'debounce', 'enabled']}
                           label="启用消息防抖"
@@ -428,11 +428,11 @@ const SettingsPage: React.FC = () => {
                   {({ getFieldValue }) =>
                     getFieldValue(['adapters', 'linyu', 'enabled']) ? (
                       <>
-                        <Divider orientation="left" plain style={{ marginTop: 8 }}>账号配置</Divider>
+                        <Divider  plain style={{ marginTop: 8 }}>AI 账号配置</Divider>
                         <Row gutter={16}>
                           <Col span={12}>
-                            <Form.Item name={['adapters', 'linyu', 'account']} label="账号">
-                              <Input placeholder="Linyu 登录账号" />
+                            <Form.Item name={['adapters', 'linyu', 'account']} label="AI 登录账号">
+                              <Input placeholder="机器人登录账号" />
                             </Form.Item>
                           </Col>
                           <Col span={12}>
@@ -442,7 +442,7 @@ const SettingsPage: React.FC = () => {
                           </Col>
                         </Row>
 
-                        <Divider orientation="left" plain>服务器地址</Divider>
+                        <Divider  plain>服务器地址</Divider>
                         <Row gutter={16}>
                           <Col span={14}>
                             <Form.Item name={['adapters', 'linyu', 'http_host']} label="HTTP 地址" help="Linyu 服务器 IP 或域名">
@@ -468,29 +468,29 @@ const SettingsPage: React.FC = () => {
                           </Col>
                         </Row>
 
-                        <Divider orientation="left" plain>目标用户</Divider>
+                        <Divider  plain>聊天对象</Divider>
                         <Row gutter={16}>
                           <Col span={12}>
-                            <Form.Item name={['adapters', 'linyu', 'target_user_id']} label="目标用户 ID" help="留空则不限制">
+                            <Form.Item name={['adapters', 'linyu', 'target_user_id']} label="聊天对象 userId" help="这是 AI 要回复的用户，不是 AI 自己">
                               <Input placeholder="指定聊天对象的用户 ID" />
                             </Form.Item>
                           </Col>
                           <Col span={12}>
-                            <Form.Item name={['adapters', 'linyu', 'target_user_account']} label="目标用户账号">
+                            <Form.Item name={['adapters', 'linyu', 'target_user_account']} label="聊天对象账号">
                               <Input placeholder="指定聊天对象的账号" />
                             </Form.Item>
                           </Col>
                         </Row>
                         <Form.Item
                           name={['adapters', 'linyu', 'auto_bind_first_user']}
-                          label="自动绑定首个用户"
+                          label="自动绑定首个聊天对象"
                           valuePropName="checked"
-                          help="首次收到消息时自动将发送者设为目标用户"
+                          help="适合单人测试；未手动指定聊天对象时，首次消息的发送者会被锁定为聊天对象"
                         >
                           <Switch checkedChildren="启用" unCheckedChildren="禁用" />
                         </Form.Item>
 
-                        <Divider orientation="left" plain>分段发送</Divider>
+                        <Divider  plain>分段发送</Divider>
                         <Form.Item
                           name={['adapters', 'linyu', 'segment_config', 'enabled']}
                           label="启用分段发送"
@@ -540,7 +540,7 @@ const SettingsPage: React.FC = () => {
                           </Col>
                         </Row>
 
-                        <Divider orientation="left" plain>消息防抖（合并）</Divider>
+                        <Divider  plain>消息防抖（合并）</Divider>
                         <Form.Item
                           name={['adapters', 'linyu', 'debounce', 'enabled']}
                           label="启用消息防抖"

@@ -204,8 +204,8 @@ async def bind_linyu_account(token: str = Depends(get_access_token), linyu_user_
     """绑定Linyu账号
     
     接受 Linyu 用户 ID（UUID格式）或 Linyu 账号名。
-    如果传入的是账号名且 Linyu 服务可达，会自动解析为用户 ID。
-    如果 Linyu 服务不可达，直接以账号名作为标识存储。
+    如果传入的是账号名，会自动解析为用户 ID。
+    解析失败时直接报错，避免绑定到不存在的账号。
     """
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
@@ -217,6 +217,14 @@ async def bind_linyu_account(token: str = Depends(get_access_token), linyu_user_
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="无效的令牌"
+        )
+
+    # 获取当前用户
+    user = await user_manager.get_user_by_id(user_info['user_id'])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
         )
     
     input_value = linyu_user_id.strip()
@@ -230,24 +238,19 @@ async def bind_linyu_account(token: str = Depends(get_access_token), linyu_user_
         # 用户输入的是账号名，尝试解析为 userId
         display_account = input_value
         resolved = await _resolve_linyu_user_id(input_value)
-        if resolved:
-            resolved_id = resolved
-        # 如果解析失败，直接用账号名作为 linyu_user_id 存储
+        if not resolved:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="未能解析该 Linyu 账号，请确认账号存在且后端 Linyu 连接正常"
+            )
+        resolved_id = resolved
 
     # 检查Linyu用户ID是否已被绑定
     existing_user = await user_manager.get_user_by_linyu_id(resolved_id)
-    if existing_user:
+    if existing_user and existing_user.id != user.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="该Linyu账号已被绑定"
-        )
-    
-    # 获取用户
-    user = await user_manager.get_user_by_id(user_info['user_id'])
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="用户不存在"
         )
     
     # 更新用户Linyu ID和账号名
@@ -275,6 +278,7 @@ async def _resolve_linyu_user_id(account: str) -> Optional[str]:
     """通过 Linyu API 将账号解析为用户 ID"""
     import aiohttp
     from backend.config import config as app_config
+    from backend.user import user_manager
 
     linyu_config = app_config.adapters_config.get("linyu", {})
     http_host = linyu_config.get("http_host", "127.0.0.1")
@@ -288,52 +292,71 @@ async def _resolve_linyu_user_id(account: str) -> Optional[str]:
     if ":" not in base_url.split("://", 1)[1]:
         base_url = f"{base_url}:{http_port}"
 
-    # 需要先获取 token（使用 bot 的 Linyu 账号登录）
-    bot_account = linyu_config.get("account", "")
-    bot_password = linyu_config.get("password", "")
-    if not bot_account or not bot_password:
+    credential_candidates: list[tuple[str, str]] = []
+
+    # 优先尝试全局机器人账号
+    bot_account = str(linyu_config.get("account", "") or "").strip()
+    bot_password = str(linyu_config.get("password", "") or "").strip()
+    if bot_account and bot_password:
+        credential_candidates.append((bot_account, bot_password))
+
+    # 再尝试所有用户级 Linyu AI 账号
+    try:
+        users = await user_manager.list_users(limit=1000)
+        for user in users:
+            user_cfg = await user_manager.get_user_config_dict(user.id)
+            user_linyu = ((user_cfg or {}).get("adapters", {}) or {}).get("linyu", {}) or {}
+            account_value = str(user_linyu.get("account", "") or "").strip()
+            password_value = str(user_linyu.get("password", "") or "").strip()
+            if account_value and password_value and (account_value, password_value) not in credential_candidates:
+                credential_candidates.append((account_value, password_value))
+    except Exception:
+        pass
+
+    if not credential_candidates:
         return None
 
     try:
         async with aiohttp.ClientSession() as session:
-            # 获取公钥
-            async with session.get(f"{base_url}/v1/api/login/public-key") as resp:
-                pk_result = await resp.json()
-            public_key_pem = pk_result.get("data", "") if isinstance(pk_result, dict) else str(pk_result)
+            for login_account, login_password in credential_candidates:
+                # 获取公钥
+                async with session.get(f"{base_url}/v1/api/login/public-key") as resp:
+                    pk_result = await resp.json()
+                public_key_pem = pk_result.get("data", "") if isinstance(pk_result, dict) else str(pk_result)
 
-            # 加密密码
-            from cryptography.hazmat.primitives.asymmetric import padding
-            from cryptography.hazmat.primitives.serialization import load_pem_public_key
-            import base64
+                # 加密密码
+                from cryptography.hazmat.primitives.asymmetric import padding
+                from cryptography.hazmat.primitives.serialization import load_pem_public_key
+                import base64
 
-            password_str = str(bot_password) if bot_password else ""
-            public_key = load_pem_public_key(str(public_key_pem).encode("utf-8"))
-            encrypted = public_key.encrypt(password_str.encode("utf-8"), padding.PKCS1v15())
-            encrypted_password = base64.b64encode(encrypted).decode("utf-8")
+                password_str = str(login_password) if login_password else ""
+                public_key = load_pem_public_key(str(public_key_pem).encode("utf-8"))
+                encrypted = public_key.encrypt(password_str.encode("utf-8"), padding.PKCS1v15())
+                encrypted_password = base64.b64encode(encrypted).decode("utf-8")
 
-            # 登录获取 token
-            login_payload = {"account": bot_account, "password": encrypted_password, "onlineEquipment": "bot"}
-            async with session.post(f"{base_url}/v1/api/login", json=login_payload) as resp:
-                login_result = await resp.json()
-            login_data = login_result.get("data") if isinstance(login_result, dict) else None
-            if not login_data or "token" not in login_data:
-                return None
-            bot_token = login_data["token"]
+                # 登录获取 token
+                login_payload = {"account": login_account, "password": encrypted_password, "onlineEquipment": "bot"}
+                async with session.post(f"{base_url}/v1/api/login", json=login_payload) as resp:
+                    login_result = await resp.json()
+                login_data = login_result.get("data") if isinstance(login_result, dict) else None
+                if not login_data or "token" not in login_data:
+                    continue
+                bot_token = login_data["token"]
 
-            # 搜索用户
-            headers = {"x-token": bot_token}
-            search_payload = {"userInfo": account}
-            async with session.post(f"{base_url}/v1/api/user/search", json=search_payload, headers=headers) as resp:
-                search_result = await resp.json()
-            data = search_result.get("data") if isinstance(search_result, dict) else None
-            if isinstance(data, list):
-                for item in data:
-                    if isinstance(item, dict) and str(item.get("account", "")) == account:
-                        return str(item.get("id") or item.get("userId") or "")
-                if len(data) == 1 and isinstance(data[0], dict):
-                    return str(data[0].get("id") or data[0].get("userId") or "")
-            elif isinstance(data, dict):
-                return str(data.get("id") or data.get("userId") or "")
+                # 搜索用户
+                headers = {"x-token": bot_token}
+                search_payload = {"userInfo": account}
+                async with session.post(f"{base_url}/v1/api/user/search", json=search_payload, headers=headers) as resp:
+                    search_result = await resp.json()
+                data = search_result.get("data") if isinstance(search_result, dict) else None
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and str(item.get("account", "")) == account:
+                            return str(item.get("id") or item.get("userId") or "")
+                    if len(data) == 1 and isinstance(data[0], dict):
+                        return str(data[0].get("id") or data[0].get("userId") or "")
+                elif isinstance(data, dict):
+                    return str(data.get("id") or data.get("userId") or "")
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Linyu 账号解析失败: {e}")

@@ -129,6 +129,13 @@ class UserManager:
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 
+    async def has_any_linyu_binding(self) -> bool:
+        """是否存在任意已绑定的 Linyu 账号。"""
+        async with self.get_session() as session:
+            stmt = select(User.id).where(User.linyu_user_id.is_not(None)).limit(1)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none() is not None
+
     async def get_or_create_user_by_linyu_id(
         self,
         linyu_user_id: str,
@@ -270,6 +277,7 @@ class UserManager:
             'prompt_enhancer_config': 'prompt_enhancer',
             'emote_config': 'emotes',
             'proactive_chat_config': 'proactive_chat',
+            'adapters': 'adapters',
         }
 
         file_data: Dict[str, Any] = {}
@@ -320,6 +328,7 @@ class UserManager:
             'prompt_enhancer': 'prompt_enhancer',
             'emotes': 'emotes',
             'proactive_chat': 'proactive_chat',
+            'adapters': 'adapters',
             'system_prompt': 'system_prompt',
             'preferences': 'preferences',
         }

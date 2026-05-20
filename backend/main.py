@@ -3,8 +3,9 @@ import os
 import sys
 import threading
 import uvicorn
+import copy
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 
 # Use selector loop on Windows to avoid Proactor connection reset noise.
 if sys.platform.startswith("win"):
@@ -39,6 +40,7 @@ from backend.core.bot import Bot
 from backend.adapters.console import ConsoleAdapter
 from backend.adapters.qq import QQAdapter
 from backend.adapters.linyu import LinyuAdapter
+from backend.adapters.linyu_manager import LinyuSessionManager, get_linyu_session_manager, set_linyu_session_manager
 from backend.config import config
 from backend.api.config import router as config_router
 from backend.api.chat import router as chat_router
@@ -64,6 +66,7 @@ from backend.api.voice_session import router as voice_session_router
 from backend.api.daily_schedule import router as daily_schedule_router
 from backend.api.prompt import router as prompt_router
 from backend.api.agent_delegate import router as agent_delegate_router
+from backend.api.linyu_sessions import router as linyu_sessions_router
 from backend.user import user_manager
 
 # 创建 FastAPI 应用
@@ -117,6 +120,7 @@ app.include_router(voice_session_router)
 app.include_router(daily_schedule_router)
 app.include_router(prompt_router)
 app.include_router(agent_delegate_router)
+app.include_router(linyu_sessions_router)
 
 
 @app.get("/api/health")
@@ -164,6 +168,10 @@ async def on_startup():
 @app.on_event("shutdown")
 async def on_shutdown():
     """记录关闭流程，后台线程会随进程退出。"""
+    linyu_manager = get_linyu_session_manager()
+    if linyu_manager:
+        linyu_manager.request_stop()
+        print("ℹ️ 已请求关闭全部 Linyu 用户会话")
     thread = _adapter_thread
     if thread and thread.is_alive():
         print("ℹ️ FastAPI 正在关闭，适配器后台线程将随进程退出")
@@ -247,6 +255,8 @@ async def start_adapters():
 
         adapters_config = config.adapters_config
         tasks: list[asyncio.Task] = []
+        linyu_session_manager = LinyuSessionManager(bot)
+        set_linyu_session_manager(linyu_session_manager)
 
         if proactive_scheduler:
             async def _send_web_message(target: dict, payload):
@@ -300,29 +310,13 @@ async def start_adapters():
                 proactive_scheduler.register_sender("qq_private", _send_qq_private)
                 proactive_scheduler.register_sender("qq_group", _send_qq_group)
 
-        # Linyu 适配器
-        linyu_adapter: Optional[LinyuAdapter] = None
-        linyu_config = adapters_config.get("linyu", {})
-        if linyu_config.get("enabled", False):
-            linyu_adapter = LinyuAdapter(bot)
-            print("💬 Linyu 适配器已启用")
+        if proactive_scheduler:
+            async def _send_linyu_private(target: dict, payload):
+                ok = await linyu_session_manager.send_private(target, payload)
+                if not ok:
+                    print(f"⚠️ 未找到匹配的 Linyu 适配器实例，无法发送主动消息: target={target}")
 
-            if proactive_scheduler:
-                async def _send_linyu_private(target: dict, payload):
-                    user = target.get("user_id")
-                    if not user:
-                        return
-                    if isinstance(payload, dict):
-                        text = payload.get("text")
-                        image = payload.get("image")
-                        if text:
-                            await linyu_adapter.send_private_message(user, text)
-                        if image:
-                            await linyu_adapter.send_image_message(user, image)
-                    else:
-                        await linyu_adapter.send_private_message(user, str(payload))
-
-                proactive_scheduler.register_sender("linyu_private", _send_linyu_private)
+            proactive_scheduler.register_sender("linyu_private", _send_linyu_private)
 
         # 启动主动聊天调度器后再启动各适配器，避免被长运行任务阻塞
         if proactive_scheduler:
@@ -344,8 +338,8 @@ async def start_adapters():
                 if not user or not text:
                     return
 
-                if channel == "linyu_private" and linyu_adapter:
-                    await linyu_adapter._send_text_once(user, text, is_group=False)
+                if channel == "linyu_private":
+                    await linyu_session_manager.send_raw_text(target, text)
                 elif channel == "qq_private" and qq_adapter:
                     await qq_adapter._send_raw_private_message(user, text)
                 elif channel == "qq_group" and qq_adapter:
@@ -375,8 +369,7 @@ async def start_adapters():
 
         if qq_adapter:
             tasks.append(asyncio.create_task(qq_adapter.start()))
-        if linyu_adapter:
-            tasks.append(asyncio.create_task(linyu_adapter.start()))
+        tasks.append(asyncio.create_task(linyu_session_manager.run()))
         if console_adapter:
             tasks.append(asyncio.create_task(console_adapter.start()))
 

@@ -6,6 +6,7 @@ from pathlib import Path
 import logging
 from ..config import config
 from .bot_provider import reset_bot
+from ..adapters.linyu_manager import get_linyu_session_manager
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,9 @@ async def update_config(config_data: ConfigRequest):
         # 热更新内存中的配置并重置Bot实例
         config.refresh_from_file()
         reset_bot()
+        manager = get_linyu_session_manager()
+        if manager:
+            manager.request_refresh_all()
         
         logger.info("Config saved successfully")
         return {"success": True}

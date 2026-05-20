@@ -15,6 +15,14 @@ router = APIRouter(prefix="/api", tags=["memory"])
 # 共享MemoryManager实例
 _memory_manager = None
 
+
+def _build_memory_user_display(user: Any, fallback_user_id: str) -> str:
+    """构造记忆系统用户展示串：项目用户名 + QQ号 + Linyu账号。"""
+    username = str(getattr(user, "nickname", None) or getattr(user, "username", None) or fallback_user_id).strip()
+    qq_id = str(getattr(user, "qq_user_id", None) or "").strip() or "-"
+    linyu_account = str(getattr(user, "linyu_account", None) or getattr(user, "linyu_user_id", None) or "").strip() or "-"
+    return f"{username} | QQ:{qq_id} | Linyu:{linyu_account}"
+
 def get_memory_manager():
     """获取共享记忆管理器实例"""
     global _memory_manager
@@ -132,7 +140,7 @@ async def get_memory_users():
         try:
             from backend.user import user_manager
             for uid in user_ids:
-                info = {"user_id": uid, "display_name": uid}
+                info = {"user_id": uid, "display_name": uid, "selector_key": uid}
                 # 尝试按 qq_user_id 查找
                 user = await user_manager.get_user_by_qq_id(uid)
                 if not user and uid.isdigit():
@@ -141,21 +149,13 @@ async def get_memory_users():
                     # 尝试按 username 查找
                     user = await user_manager.get_user_by_username(uid)
                 if user:
-                    nickname = getattr(user, 'nickname', None) or getattr(user, 'username', None)
-                    username = getattr(user, 'username', None)
-                    qq_id = getattr(user, 'qq_user_id', None)
-                    parts = []
-                    if nickname:
-                        parts.append(nickname)
-                    if qq_id and qq_id != uid:
-                        parts.append(f"QQ:{qq_id}")
-                    elif username and username != nickname and username != uid:
-                        parts.append(f"@{username}")
-                    info["display_name"] = " ".join(parts) if parts else uid
+                    display_name = _build_memory_user_display(user, uid)
+                    info["display_name"] = display_name
+                    info["selector_key"] = display_name
                 user_info_list.append(info)
         except Exception:
             # 如果用户管理器不可用，回退到纯 ID 列表
-            user_info_list = [{"user_id": uid, "display_name": uid} for uid in user_ids]
+            user_info_list = [{"user_id": uid, "display_name": uid, "selector_key": uid} for uid in user_ids]
 
         return {"user_ids": user_ids, "user_info": user_info_list}
     except Exception as e:

@@ -152,7 +152,7 @@ const LinyuBindSection: React.FC<{ user: any; onSuccess: () => void }> = ({ user
     <>
       <Alert
         message="Linyu 账号绑定"
-        description="绑定 Linyu 账号后，通过 Linyu 聊天时系统能识别你的身份，使用你的个性化配置与 AI 对话。你可以输入 Linyu 账号名或用户 ID。"
+        description="这里绑定的是你的 Linyu 用户账号（身份），不是 AI 登录账号。AI 机器人账号由管理员在全局 Linyu 适配器里配置。你可以输入账号名或用户 ID。"
         type="info"
         showIcon
         style={{ marginBottom: 24 }}
@@ -162,7 +162,7 @@ const LinyuBindSection: React.FC<{ user: any; onSuccess: () => void }> = ({ user
         <div style={{ marginBottom: 16 }}>
           <Space>
             <LinkOutlined style={{ fontSize: 20, color: '#722ed1' }} />
-            <span>当前绑定的 Linyu 账号：</span>
+            <span>当前绑定的 Linyu 用户账号：</span>
             <Tag color="purple" style={{ fontSize: 14 }}>{user.linyu_account || user.linyu_user_id}</Tag>
           </Space>
         </div>
@@ -175,7 +175,7 @@ const LinyuBindSection: React.FC<{ user: any; onSuccess: () => void }> = ({ user
         </div>
       )}
 
-      <Form.Item label="绑定 Linyu 账号" help="输入你的 Linyu 账号名或用户 ID，系统会自动解析。每个 Linyu 账号只能绑定一个用户">
+      <Form.Item label="绑定你的 Linyu 账号" help="输入你的用户账号名或用户 ID，系统会自动解析。每个 Linyu 用户账号只能绑定一个用户">
         <Space>
           <Input
             placeholder="输入 Linyu 账号名或用户 ID"
@@ -249,10 +249,11 @@ const UserSettingsPage: React.FC = () => {
       setRulesIsCustom(rulesData.is_custom);
       setDefaultRules(defRules);
       
-      // 设置表单值（LLM / TTS）
+      // 设置表单值（LLM / TTS / 用户级适配器）
       form.setFieldsValue({
         llm: userCfg.llm || {},
         tts: userCfg.tts || {},
+        adapters: userCfg.adapters || {},
       });
 
       // 管理员：加载适配器配置到 adapterForm
@@ -271,7 +272,7 @@ const UserSettingsPage: React.FC = () => {
     try {
       const values = form.getFieldsValue();
       
-      // 只保存 LLM / TTS 配置
+      // 保存 LLM / TTS / 用户级适配器配置
       const updateData: any = {};
       
       if (values.llm && Object.keys(values.llm).some(k => values.llm[k])) {
@@ -280,6 +281,19 @@ const UserSettingsPage: React.FC = () => {
       
       if (values.tts && Object.keys(values.tts).some(k => values.tts[k])) {
         updateData.tts = values.tts;
+      }
+
+      if (values.adapters?.linyu && Object.keys(values.adapters.linyu).some(k => values.adapters.linyu[k] !== undefined && values.adapters.linyu[k] !== '')) {
+        const rawLinyu = values.adapters.linyu || {};
+        const sanitizedLinyu = {
+          enabled: rawLinyu.enabled,
+          auto_bind_first_user: rawLinyu.auto_bind_first_user,
+          account: rawLinyu.account,
+          password: rawLinyu.password,
+        };
+        updateData.adapters = {
+          linyu: sanitizedLinyu,
+        };
       }
       
       await userConfigApi.updateConfig(updateData);
@@ -818,6 +832,49 @@ const UserSettingsPage: React.FC = () => {
                     <QQBindSection user={user} onSuccess={loadConfigs} />
                     <Divider />
                     <LinyuBindSection user={user} onSuccess={loadConfigs} />
+                    <Divider />
+                    <Alert
+                      message="Linyu 独立双账号配置"
+                      description="这里配置的是你专属 Linyu 会话使用的 AI 登录账号。你的聊天对象会自动使用当前绑定的 Linyu 身份，全局服务器地址也会自动继承，不需要再手填 HTTP / WS。"
+                      type="warning"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                    />
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item name={['adapters', 'linyu', 'enabled']} label="启用个人 Linyu 会话" valuePropName="checked">
+                          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item
+                          name={['adapters', 'linyu', 'auto_bind_first_user']}
+                          label="自动绑定首个聊天对象"
+                          valuePropName="checked"
+                          help="当你还没绑定自己的 Linyu 身份时，可临时锁定首个发消息的人作为聊天对象"
+                        >
+                          <Switch checkedChildren="启用" unCheckedChildren="禁用" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item name={['adapters', 'linyu', 'account']} label="AI 登录账号">
+                          <Input placeholder="机器人账号" />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name={['adapters', 'linyu', 'password']} label="AI 登录密码">
+                          <Input.Password placeholder="机器人账号密码" />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Alert
+                      message="自动配对说明"
+                      description={`系统会优先把 AI 账号配对到你当前绑定的 Linyu 账号：${user?.linyu_account || user?.linyu_user_id || '尚未绑定'}。若你还没绑定，可先完成上方「Linyu 账号绑定」，或临时开启“自动绑定首个聊天对象”。`}
+                      type="info"
+                      showIcon
+                    />
                   </>
                 ),
               },
@@ -867,7 +924,7 @@ const UserSettingsPage: React.FC = () => {
                       }>
                         {({ getFieldValue }: any) => getFieldValue(['adapters', 'qq', 'enabled']) ? (
                           <>
-                            <Divider orientation="left" plain style={{ marginTop: 8 }}>连接配置</Divider>
+                            <Divider  plain style={{ marginTop: 8 }}>连接配置</Divider>
                             <Row gutter={16}>
                               <Col span={16}>
                                 <Form.Item name={['adapters', 'qq', 'ws_host']} label="WebSocket 地址" help="NapCat 监听地址">
@@ -891,7 +948,7 @@ const UserSettingsPage: React.FC = () => {
                             >
                               <Switch checkedChildren="需要" unCheckedChildren="不需要" />
                             </Form.Item>
-                            <Divider orientation="left" plain>分段发送</Divider>
+                            <Divider  plain>分段发送</Divider>
                             <Form.Item
                               name={['adapters', 'qq', 'segment_config', 'enabled']}
                               label="启用分段发送"
@@ -964,11 +1021,11 @@ const UserSettingsPage: React.FC = () => {
                       }>
                         {({ getFieldValue }: any) => getFieldValue(['adapters', 'linyu', 'enabled']) ? (
                           <>
-                            <Divider orientation="left" plain style={{ marginTop: 8 }}>账号配置</Divider>
+                            <Divider  plain style={{ marginTop: 8 }}>AI 账号配置</Divider>
                             <Row gutter={16}>
                               <Col span={12}>
-                                <Form.Item name={['adapters', 'linyu', 'account']} label="账号">
-                                  <Input placeholder="Linyu 登录账号" />
+                                <Form.Item name={['adapters', 'linyu', 'account']} label="AI 登录账号">
+                                  <Input placeholder="机器人登录账号" />
                                 </Form.Item>
                               </Col>
                               <Col span={12}>
@@ -977,7 +1034,7 @@ const UserSettingsPage: React.FC = () => {
                                 </Form.Item>
                               </Col>
                             </Row>
-                            <Divider orientation="left" plain>服务器地址</Divider>
+                            <Divider  plain>服务器地址</Divider>
                             <Row gutter={16}>
                               <Col span={14}>
                                 <Form.Item name={['adapters', 'linyu', 'http_host']} label="HTTP 地址" help="Linyu 服务器 IP 或域名">
@@ -1002,28 +1059,28 @@ const UserSettingsPage: React.FC = () => {
                                 </Form.Item>
                               </Col>
                             </Row>
-                            <Divider orientation="left" plain>目标用户</Divider>
+                            <Divider  plain>聊天对象</Divider>
                             <Row gutter={16}>
                               <Col span={12}>
-                                <Form.Item name={['adapters', 'linyu', 'target_user_id']} label="目标用户 ID" help="留空则不限制">
+                                <Form.Item name={['adapters', 'linyu', 'target_user_id']} label="聊天对象 userId" help="这是 AI 要回复的用户，不是 AI 自己">
                                   <Input placeholder="指定聊天对象的用户 ID" />
                                 </Form.Item>
                               </Col>
                               <Col span={12}>
-                                <Form.Item name={['adapters', 'linyu', 'target_user_account']} label="目标用户账号">
+                                <Form.Item name={['adapters', 'linyu', 'target_user_account']} label="聊天对象账号">
                                   <Input placeholder="指定聊天对象的账号" />
                                 </Form.Item>
                               </Col>
                             </Row>
                             <Form.Item
                               name={['adapters', 'linyu', 'auto_bind_first_user']}
-                              label="自动绑定首个用户"
+                              label="自动绑定首个聊天对象"
                               valuePropName="checked"
-                              help="首次收到消息时自动将发送者设为目标用户"
+                              help="适合单人测试；未手动指定聊天对象时，首次消息的发送者会被锁定为聊天对象"
                             >
                               <Switch checkedChildren="启用" unCheckedChildren="禁用" />
                             </Form.Item>
-                            <Divider orientation="left" plain>分段发送</Divider>
+                            <Divider  plain>分段发送</Divider>
                             <Form.Item
                               name={['adapters', 'linyu', 'segment_config', 'enabled']}
                               label="启用分段发送"
