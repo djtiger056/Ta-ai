@@ -20,13 +20,13 @@ call venv\Scripts\activate.bat
 echo      OK
 
 echo [2/3] 清理端口...
-netstat -ano 2>nul | findstr ":8002.*LISTENING" >nul 2>&1
+netstat -ano 2>nul | findstr ":8003.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8002.*LISTENING"') do (
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8003.*LISTENING"') do (
         taskkill /PID %%a /F >nul 2>&1
     )
     timeout /t 2 /nobreak >nul
-    echo      已清理端口 8002
+    echo      已清理端口 8003
 ) else (
     echo      OK - 端口可用
 )

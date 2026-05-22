@@ -278,8 +278,8 @@ npm run dev
 ### 访问应用
 
 - **前端界面** - http://localhost:3000
-- **后端 API** - http://localhost:8000
-- **API 文档** - http://localhost:8000/docs
+- **后端 API** - http://localhost:8003
+- **API 文档** - http://localhost:8003/docs
 - **控制台模式** - `python run.py console`
 
 ## 👥 多用户管理
@@ -491,7 +491,7 @@ class MyPlugin(MCPPlugin):
 
 安装插件：
 ```bash
-curl -X POST http://localhost:8000/api/mcp/plugins/install \
+curl -X POST http://localhost:8003/api/mcp/plugins/install \
   -H "Content-Type: application/json" \
   -d '{"name": "my_plugin", "module": "my_plugin.module"}'
 ```
@@ -499,7 +499,7 @@ curl -X POST http://localhost:8000/api/mcp/plugins/install \
 ## 🔌 API 接口
 
 ### WebSocket
-- `ws://localhost:8000/ws/chat` - 实时聊天流式接口
+- `ws://localhost:8003/ws/chat` - 实时聊天流式接口
 
 ### 核心 API
 | 功能 | 端点 | 说明 |
@@ -521,7 +521,7 @@ curl -X POST http://localhost:8000/api/mcp/plugins/install \
 - `POST /api/{module}/config` - 更新配置
 - `POST /api/{module}/test-connection` - 测试连接
 
-完整 API 文档：http://localhost:8000/docs
+完整 API 文档：http://localhost:8003/docs
 
 ## 🔧 开发指南
 
@@ -571,7 +571,7 @@ class MyPlugin(MCPPlugin):
 ### 常见问题
 
 **端口占用**
-- 检查 8000（后端）和 3000（前端）端口
+- 检查 8003（后端）和 3000（前端）端口
 - 修改 [config.yaml](config.yaml) 中的 `server.port`
 
 **API 连接失败**
@@ -639,7 +639,7 @@ python run.py
 - [多用户管理](http://localhost:3000/admin-users)
 
 **后端服务**
-- [API 文档](http://localhost:8000/docs)
+- [API 文档](http://localhost:8003/docs)
 - [配置文件](config.yaml)
 
 ## 📄 许可证

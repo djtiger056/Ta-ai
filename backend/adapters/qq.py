@@ -753,56 +753,19 @@ class QQAdapter:
                 await self._send_raw_private_message(target_id, message)
             return
         
-        # 分割文本
-        segments = []
-        if self.split_strategy == 'sentence':
-            # 分句发送模式：直接按句子分割
-            sentences = re.split(r'[。！？.!?]+', message.strip())
-            sentences = [s.strip() for s in sentences if s.strip()]
-            
-            # 合并过短的句子（如果下一个句子也很短，就合并）
-            merged_sentences = []
-            i = 0
-            while i < len(sentences):
-                current = sentences[i]
-                # 如果当前句子太短，且不是最后一个句子，尝试与下一个句子合并
-                if len(current) < self.min_segment_length and i < len(sentences) - 1:
-                    next_sentence = sentences[i + 1]
-                    combined = current + '，' + next_sentence
-                    if len(combined) <= self.max_segment_length:
-                        merged_sentences.append(combined)
-                        i += 2
-                    else:
-                        # 合并失败，尝试将短句合并到前一个句子
-                        if merged_sentences and len(merged_sentences[-1]) + len(current) + 1 <= self.max_segment_length:
-                            merged_sentences[-1] = merged_sentences[-1] + '，' + current
-                        else:
-                            # 无法合并，也要保留短句（不过滤）
-                            merged_sentences.append(current)
-                        i += 1
-                else:
-                    merged_sentences.append(current)
-                    i += 1
-            
-            # 不再过滤过短的句子，避免消息不完整
-            segments = merged_sentences
-            
-            # 如果分割后只剩一段，检查是否需要合并（原消息本身就很短）
-            if len(segments) == 1 and len(message) <= self.max_segment_length:
-                # 只有一段短消息，直接发送
-                if is_group:
-                    await self._send_raw_group_message(target_id, message)
-                else:
-                    await self._send_raw_private_message(target_id, message)
-                return
-        else:
-            # 使用原有的smart_split_text进行分割
-            segments = smart_split_text(
-                text=message,
-                max_length=self.max_segment_length,
-                min_length=self.min_segment_length,
-                strategy=self.split_strategy
-            )
+        segments = smart_split_text(
+            text=message,
+            max_length=self.max_segment_length,
+            min_length=self.min_segment_length,
+            strategy=self.split_strategy
+        )
+
+        if len(segments) == 1 and segments[0] == message:
+            if is_group:
+                await self._send_raw_group_message(target_id, message)
+            else:
+                await self._send_raw_private_message(target_id, message)
+            return
         
         if not segments:
             return

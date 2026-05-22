@@ -92,7 +92,7 @@ def check_virtual_environment(project_root: Path) -> None:
     print("="*60 + "\n")
 
 
-def check_and_free_port(port: int = 8002) -> None:
+def check_and_free_port(port: int = 8003) -> None:
     """检查并释放指定端口"""
     import socket
     import subprocess
@@ -180,7 +180,7 @@ def main() -> None:
             sys.exit(1)
     
     # 检查并清理端口
-    check_and_free_port(8002)
+    check_and_free_port(8003)
     
     print("执行 backend.main...")
     import subprocess

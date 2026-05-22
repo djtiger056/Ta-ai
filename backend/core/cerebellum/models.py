@@ -141,6 +141,7 @@ class CerebellumConfigData:
     history_limit: int = 2880
     replace_time_windows: bool = True
     motivation_cooldown_seconds: int = 1800
+    require_user_reengagement_after_dispatch: bool = True
     baseline_values: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BASELINES))
     circadian: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CIRCADIAN))
     inactivity_stimulus: Dict[str, Any] = field(default_factory=lambda: {
@@ -177,6 +178,7 @@ class CerebellumConfigData:
             "history_limit": self.history_limit,
             "replace_time_windows": self.replace_time_windows,
             "motivation_cooldown_seconds": self.motivation_cooldown_seconds,
+            "require_user_reengagement_after_dispatch": self.require_user_reengagement_after_dispatch,
             "baseline_values": {key: round(clamp(value), 4) for key, value in self.baseline_values.items()},
             "circadian": self.circadian,
             "inactivity_stimulus": self.inactivity_stimulus,

@@ -137,6 +137,34 @@ def test_enqueue_web_message_preserves_text_and_image():
     assert messages[0]["image_base64"]
 
 
+def test_limited_warning_suppresses_repeated_missing_target_logs(capsys):
+    scheduler = build_scheduler()
+    now = scheduler._now()
+    message = "[Proactive] 未找到用户 3889687544 的目标配置，跳过待办事项"
+
+    for _ in range(5):
+        scheduler._log_limited_warning(
+            "missing_reminder_target",
+            "3889687544:3889687544",
+            message,
+            now=now,
+        )
+
+    captured = capsys.readouterr()
+    first_phase_lines = [line for line in captured.out.splitlines() if line.strip()]
+    assert first_phase_lines == [message, message, message]
+
+    scheduler._log_limited_warning(
+        "missing_reminder_target",
+        "3889687544:3889687544",
+        message,
+        now=now + timedelta(minutes=31),
+    )
+
+    captured = capsys.readouterr()
+    assert "最近抑制 2 次重复告警" in captured.out
+
+
 @pytest.mark.asyncio
 async def test_motivation_signal_triggers_proactive_message():
     scheduler = build_scheduler()
@@ -155,4 +183,5 @@ async def test_motivation_signal_triggers_proactive_message():
     messages = scheduler.poll_pending_messages("web", "web_user", "web_user")
     assert len(messages) == 1
     assert messages[0]["content"] == "主动消息测试"
-    assert "当前小脑动机" in scheduler.bot.instructions[-1]
+    assert "内心想法" in scheduler.bot.instructions[-1]
+    assert "语气轻快一点" in scheduler.bot.instructions[-1]

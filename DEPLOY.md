@@ -83,7 +83,7 @@ cd /myproject/Ta
 ```
 
 默认监听：
-- 后端 API：`8002`
+- 后端 API：`8003`
 
 前端开发模式：
 
@@ -93,7 +93,7 @@ npm run dev -- --host 0.0.0.0 --port 3000
 ```
 
 前端已配置代理：
-- `/api` -> `http://localhost:8002`
+- `/api` -> `http://localhost:8003`
 
 所以你可以直接访问：
 - `http://你的服务器IP:3000`
@@ -102,7 +102,7 @@ npm run dev -- --host 0.0.0.0 --port 3000
 
 1. 后端用 systemd 守护
 2. 前端用 Nginx 直接托管 `frontend/dist`
-3. `/api` 反代到 `127.0.0.1:8002`
+3. `/api` 反代到 `127.0.0.1:8003`
 
 我已经给你生成好了示例文件：
 - `/myproject/Ta/deploy/ta.service`
