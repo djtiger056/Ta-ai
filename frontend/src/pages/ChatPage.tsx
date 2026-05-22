@@ -26,6 +26,7 @@ interface ChatMessage {
   timestamp: Date
   emote?: ChatEmote
   imageDataUrl?: string
+  videoUrl?: string
   source?: 'dialogue' | 'proactive'
 }
 
@@ -223,6 +224,16 @@ const ChatPage: React.FC = () => {
                 )
               }
 
+              if (parsed.video) {
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === botMessage.id
+                      ? { ...msg, videoUrl: parsed.video }
+                      : msg
+                  )
+                )
+              }
+
               if (parsed.audio) {
                 const mime = parsed.audio_mime || 'audio/mpeg'
                 const audio = new Audio(`data:${mime};base64,${parsed.audio}`)
@@ -344,6 +355,15 @@ const ChatPage: React.FC = () => {
                           src={msg.imageDataUrl}
                           alt="assistant generated"
                           style={{ maxWidth: '220px', borderRadius: '8px', display: 'block' }}
+                        />
+                      </div>
+                    )}
+                    {msg.videoUrl && (
+                      <div style={{ marginTop: '8px' }}>
+                        <video
+                          src={msg.videoUrl}
+                          controls
+                          style={{ maxWidth: '320px', width: '100%', borderRadius: '8px', display: 'block' }}
                         />
                       </div>
                     )}

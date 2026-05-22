@@ -885,6 +885,68 @@ const AdminUsersPage: React.FC = () => {
                 ),
               },
               {
+                key: 'video_generation',
+                label: '视频生成',
+                children: (
+                  <div>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item name={['video_generation', 'enabled']} label="启用视频生成" valuePropName="checked">
+                          <Switch />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name={['video_generation', 'video_api', 'model']} label="视频模型">
+                          <Input placeholder="wan2.7-t2v" allowClear />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={12}>
+                        <Form.Item name={['video_generation', 'video_api', 'api_base']} label="视频 API 地址">
+                          <Input placeholder="http://127.0.0.1:18080" allowClear />
+                        </Form.Item>
+                      </Col>
+                      <Col span={12}>
+                        <Form.Item name={['video_generation', 'video_api', 'api_key']} label="视频 API Key">
+                          <Input.Password placeholder="未开启鉴权可留空" allowClear />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Row gutter={16}>
+                      <Col span={8}>
+                        <Form.Item name={['video_generation', 'video_api', 'provider']} label="上游类型">
+                          <Input placeholder="qwen / doubao / jimeng" allowClear />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name={['video_generation', 'video_api', 'ratio']} label="比例">
+                          <Input placeholder="16:9" allowClear />
+                        </Form.Item>
+                      </Col>
+                      <Col span={8}>
+                        <Form.Item name={['video_generation', 'video_api', 'duration']} label="时长（秒）">
+                          <Input type="number" placeholder="5" allowClear />
+                        </Form.Item>
+                      </Col>
+                    </Row>
+                    <Form.Item name={['video_generation', 'trigger_keywords']} label="触发关键词">
+                      <Select mode="tags" placeholder="输入关键词后回车" allowClear />
+                    </Form.Item>
+                    <Form.Item name={['video_generation', 'prompt_instruction']} label="发给 AI 伴侣的提示词">
+                      <Input.TextArea rows={4} allowClear />
+                    </Form.Item>
+                    <Button
+                      size="small"
+                      icon={<ReloadOutlined />}
+                      onClick={() => resetConfigSection('video_generation')}
+                    >
+                      重置为默认
+                    </Button>
+                  </div>
+                ),
+              },
+              {
                 key: 'vision',
                 label: '视觉识别',
                 children: (
@@ -966,54 +1028,6 @@ const AdminUsersPage: React.FC = () => {
                       size="small" 
                       icon={<ReloadOutlined />}
                       onClick={() => resetConfigSection('emotes')}
-                    >
-                      重置为默认
-                    </Button>
-                  </div>
-                ),
-              },
-              {
-                key: 'proactive_chat',
-                label: '主动聊天',
-                children: (
-                  <div>
-                    <Row gutter={16}>
-                      <Col span={12}>
-                        <Form.Item name={['proactive_chat', 'enabled']} label="启用主动聊天" valuePropName="checked">
-                          <Switch />
-                        </Form.Item>
-                      </Col>
-                      <Col span={12}>
-                        <Form.Item name={['proactive_chat', 'check_interval_seconds']} label="检查间隔(秒)">
-                          <Input type="number" min={10} placeholder="60" allowClear />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                    <Divider titlePlacement="left">每日窗口</Divider>
-                    <Row gutter={16}>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'enabled']} label="启用" valuePropName="checked">
-                          <Switch />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'start']} label="开始时间">
-                          <Input placeholder="08:00" allowClear />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'end']} label="结束时间">
-                          <Input placeholder="10:00" allowClear />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                    <Form.Item name={['proactive_chat', 'daily_window', 'max_messages_per_window']} label="最大消息数">
-                      <Input type="number" min={1} placeholder="2" allowClear />
-                    </Form.Item>
-                    <Button 
-                      size="small" 
-                      icon={<ReloadOutlined />}
-                      onClick={() => resetConfigSection('proactive_chat')}
                     >
                       重置为默认
                     </Button>

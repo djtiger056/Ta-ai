@@ -12,6 +12,8 @@ from ..providers import get_provider
 from ..config import config
 from ..tts.manager import TTSManager
 from ..image_gen import ImageGenerationManager, ImageGenerationConfig
+from ..image_gen.base_image_service import BaseImageService
+from ..video_gen import VideoGenerationManager, VideoGenerationConfig
 from ..vision import VisionRecognitionManager, VisionRecognitionConfig
 from ..asr import ASRManager, ASRConfig
 from ..memory import MemoryManager, MemoryConfig
@@ -20,9 +22,11 @@ from ..emote import EmoteManager, EmoteConfig
 from ..agent_delegate import AgentDelegator, extract_delegate_tag
 from ..agent_delegate.config import AgentDelegateConfig
 from ..user import user_manager
+from ..user.data_manager import user_data_manager
 from ..utils.config_merger import config_merger
 from ..utils.datetime_utils import get_now, from_isoformat
 from .gen_img_parser import extract_gen_img_prompt
+from .gen_video_parser import extract_gen_video_prompt
 from .tts_tag_parser import extract_tts_tag
 from .context_builder import ContextBuilder
 from .history_manager import HistoryManager
@@ -72,6 +76,8 @@ class Bot:
         self._user_tts_signatures = self._user_cache._user_tts_signatures
         self._user_image_gen_managers = self._user_cache._user_image_gen_managers
         self._user_image_gen_signatures = self._user_cache._user_image_gen_signatures
+        self._user_video_gen_managers = self._user_cache._user_video_gen_managers
+        self._user_video_gen_signatures = self._user_cache._user_video_gen_signatures
         self._session_last_companion_hint_turn: Dict[str, int] = {}
         self._roleplay_memory_managers: Dict[str, MemoryManager] = {}
         self._roleplay_memory_signatures: Dict[str, str] = {}
@@ -79,6 +85,8 @@ class Bot:
 
         # 存储最近生成的图片（用于API返回）
         self._last_generated_image: Optional[Dict[str, Any]] = None
+        self._last_generated_video: Optional[Dict[str, Any]] = None
+        self._video_intent_sessions: Dict[str, str] = {}
 
         # 存储 AI 主动触发的 TTS 文本（用于API返回）
         self._last_tts_forced_text: Optional[Dict[str, Any]] = None
@@ -99,6 +107,20 @@ class Bot:
             self.image_gen_manager = ImageGenerationManager(image_gen_config)
         except Exception as e:
             print(f"图像生成初始化失败: {str(e)}")
+
+        # 初始化视频生成管理器
+        self.video_gen_manager: Optional[VideoGenerationManager] = None
+        try:
+            video_gen_config = config.video_gen_config if hasattr(config, 'video_gen_config') else VideoGenerationConfig()
+            self.video_gen_manager = VideoGenerationManager(video_gen_config)
+        except Exception as e:
+            print(f"视频生成初始化失败: {str(e)}")
+        self.video_base_image_service = BaseImageService(
+            user_data_manager=user_data_manager,
+            fallback_image_path=config.get("image_generation", {}).get(
+                "default_base_image_path", "backend/data/default_base_image.jpg"
+            ),
+        )
         
         # 初始化视觉识别管理器
         self.vision_manager: Optional[VisionRecognitionManager] = None
@@ -292,9 +314,14 @@ class Bot:
         if not lines:
             return
 
-        context = "你对最近和对方聊过的内容有印象（以下是你的回忆片段）。如果当前话题和之前聊过的有关，可以自然地接续；不要原文复述这些内容，不相关就不提：\n" + "\n".join(lines)
+        context = (
+            "你对最近和对方聊过的内容有印象（以下是你的回忆片段）。"
+            "如果当前话题和之前聊过的有关，可以自然地接续；不要原文复述这些内容，不相关就不提：\n"
+            + "\n".join(lines)
+        )
         if enhanced_history and enhanced_history[0]["role"] == "system":
-            enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + context
+            base_content = str(enhanced_history[0].get("content", "") or "")
+            enhanced_history[0]["content"] = base_content + "\n\n" + context if base_content else context
         else:
             enhanced_history.insert(0, {
                 "role": "system",
@@ -616,6 +643,14 @@ class Bot:
     def _get_user_image_gen_manager(self, user_id: str) -> Optional[ImageGenerationManager]:
         """获取该用户的 ImageGenerationManager，委托到 UserResourceCache。"""
         return self._user_cache.get_image_gen_manager(user_id)
+
+    def _get_user_video_gen_manager(self, user_id: str) -> Optional[VideoGenerationManager]:
+        """获取该用户的 VideoGenerationManager，委托到 UserResourceCache。"""
+        return self._user_cache.get_video_gen_manager(user_id)
+
+    def invalidate_user_cache(self, user_id: str) -> None:
+        """清除指定用户的配置和资源缓存。"""
+        self._user_cache.invalidate_user(user_id)
 
     def _get_user_system_prompt(self, user_id: str) -> str:
         """获取用户的系统提示词，委托到 UserResourceCache。"""
@@ -1227,6 +1262,15 @@ class Bot:
                 }
                 print(f"[Bot] 图片已生成，大小: {len(image_data)} bytes")
 
+            cleaned_response, video_url = await self._process_video_in_response(cleaned_response, user_id, session_id)
+            if video_url:
+                self._last_generated_video = {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "video_url": video_url
+                }
+                print(f"[Bot] 视频已生成: {video_url}")
+
             # 处理回复中的委派标签 [DELEGATE: ...]
             cleaned_response, delegate_task = extract_delegate_tag(cleaned_response)
             if delegate_task and self.agent_delegator and self.agent_delegator.enabled:
@@ -1320,11 +1364,14 @@ class Bot:
             first_chunk_seen = False
             mark("llm_stream_start")
             async for chunk in provider.chat_stream(self._to_llm_messages(enhanced_history)):
+                if chunk is None:
+                    continue
                 if not first_chunk_seen:
                     mark("llm_first_chunk")
                     first_chunk_seen = True
-                full_response += chunk
-                yield chunk
+                chunk_text = str(chunk)
+                full_response += chunk_text
+                yield chunk_text
             mark("llm_stream_done")
 
             # 处理回复中的 TTS 标签 [TTS]...[/TTS]
@@ -1352,6 +1399,16 @@ class Bot:
                     "image_data": image_data
                 }
                 print(f"[Bot Stream] 图片已生成，大小: {len(image_data)} bytes")
+
+            cleaned_response, video_url = await self._process_video_in_response(cleaned_response, user_id, session_id)
+            mark("video_processed")
+            if video_url:
+                self._last_generated_video = {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "video_url": video_url
+                }
+                print(f"[Bot Stream] 视频已生成: {video_url}")
 
             # 如果清理后的响应与原始响应不同，需要重新记录到历史
             if cleaned_response != full_response:
@@ -1593,6 +1650,14 @@ class Bot:
                 cleaned = f"{prefix}] {short_prompt}"
             except ValueError:
                 cleaned = cleaned.strip()
+        if cleaned.startswith("[视频生成请求]") or cleaned.startswith("[视频生成结果]"):
+            try:
+                prefix, prompt = cleaned.split("]", 1)
+                prompt = prompt.strip()
+                short_prompt = prompt[:120] + ("..." if len(prompt) > 120 else "")
+                cleaned = f"{prefix}] {short_prompt}"
+            except ValueError:
+                cleaned = cleaned.strip()
         # 图片描述：缩成摘要，避免长段堆入记忆
         markers = [
             "这是一个图片的描述",
@@ -1615,6 +1680,10 @@ class Bot:
 
     async def _check_reminder_intent(self, message: str, user_id: str, session_id: str) -> str:
         """检测待办事项意图并创建待办事项"""
+        reminder_config = config.get("reminder", {}) or {}
+        if not reminder_config.get("enabled", False):
+            return ""
+
         if not self.memory_manager:
             return ""
 
@@ -1625,10 +1694,6 @@ class Bot:
                 return ""
 
             # 检查是否启用待办事项功能
-            reminder_config = config.get("reminder", {})
-            if not reminder_config.get("enabled", True):
-                return ""
-
             # 创建待办事项检测器
             from ..memory.reminder_detector import ReminderDetector
             timezone = reminder_config.get("timezone", "Asia/Shanghai")
@@ -1734,6 +1799,32 @@ class Bot:
         if image_mgr is None:
             return None
         return image_mgr.should_trigger_image_generation(message)
+
+    def should_generate_video(self, message: str, user_id: str = "default") -> Optional[str]:
+        """检查用户是否主动提出视频生成。"""
+        video_mgr = self._user_video_gen_managers.get(user_id) or self._get_user_video_gen_manager(user_id) or self.video_gen_manager
+        if video_mgr is None:
+            return None
+        return video_mgr.should_trigger_video_generation(message)
+
+    def _video_intent_key(self, user_id: str, session_id: Optional[str]) -> str:
+        return f"{user_id}:{session_id or user_id}"
+
+    def _build_video_generation_hint(self, user_id: str, session_id: Optional[str], message: str) -> str:
+        """命中用户视频意图时，为本轮 LLM 调用注入可配置视频提示。"""
+        video_mgr = self._get_user_video_gen_manager(user_id) or self.video_gen_manager
+        if not video_mgr:
+            self._video_intent_sessions.pop(self._video_intent_key(user_id, session_id), None)
+            return ""
+
+        user_intent = video_mgr.should_trigger_video_generation(message)
+        key = self._video_intent_key(user_id, session_id)
+        if not user_intent:
+            self._video_intent_sessions.pop(key, None)
+            return ""
+
+        self._video_intent_sessions[key] = user_intent
+        return video_mgr.build_prompt_instruction(user_intent)
      
     async def generate_image(
         self,
@@ -1813,6 +1904,10 @@ class Bot:
         """
         return extract_gen_img_prompt(response)
 
+    def _extract_video_prompt_from_response(self, response: str) -> Tuple[str, Optional[str]]:
+        """解析回复中的 [GEN_VIDEO: ...] 标签。"""
+        return extract_gen_video_prompt(response)
+
     async def _process_image_in_response(
         self,
         response: str,
@@ -1863,11 +1958,113 @@ class Bot:
         self._last_generated_image = None
         return image_data
 
+    async def generate_video(
+        self,
+        prompt: str,
+        user_id: str = "default",
+        session_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """生成视频并返回视频 URL。"""
+        session_id = session_id or user_id
+        await self._get_user_config(user_id)
+
+        video_mgr = self._get_user_video_gen_manager(user_id) or self.video_gen_manager
+        if not video_mgr:
+            return None
+
+        effective_user_id = self._user_cache._resolve_username(user_id) or user_id
+        base_image_url = await self.video_base_image_service.get_base_image_data_url(effective_user_id)
+        reference_images = [base_image_url] if base_image_url else None
+        if reference_images:
+            self.logger.info("[VideoGen] 使用用户上传底图生成参考图视频, user_id=%s", user_id)
+        else:
+            self.logger.warning(
+                "[VideoGen] 用户 %s 未上传可用底图，自动回退到文生视频",
+                user_id,
+            )
+
+        video_url = await video_mgr.generate_video(prompt, images=reference_images)
+        if video_url:
+            await self._record_video_generation(user_id, session_id, prompt, video_url)
+        return video_url
+
+    async def _record_video_generation(self, user_id: str, session_id: str, prompt: str, video_url: str):
+        """把视频生成事件写入对话上下文和记忆，方便后续追问。"""
+        try:
+            await self._load_history_from_memory(user_id, session_id)
+        except Exception as e:
+            print(f"[DEBUG] 加载历史用于视频记录失败: {e}")
+
+        short_prompt = self._sanitize_for_memory(prompt, max_length=160)
+        note = f"[视频生成] 提示词：{short_prompt}\n视频地址：{video_url}"
+        history = self._get_session_history(session_id, user_id)
+        history.append({
+            "role": "assistant",
+            "content": note,
+            "timestamp": get_now().isoformat()
+        })
+        self._trim_conversation_history(session_id, user_id)
+
+        try:
+            await self._add_conversation_to_memory(
+                user_id,
+                session_id,
+                f"[视频生成请求] {short_prompt}",
+                f"[视频生成结果] {short_prompt} {video_url}"
+            )
+        except Exception as e:
+            print(f"[DEBUG] 视频生成写入记忆失败: {e}")
+
+    async def _process_video_in_response(
+        self,
+        response: str,
+        user_id: str,
+        session_id: Optional[str] = None
+    ) -> Tuple[str, Optional[str]]:
+        """处理回复中的视频标签并生成视频。"""
+        cleaned_text, video_prompt = self._extract_video_prompt_from_response(response)
+        if not video_prompt:
+            return response, None
+
+        key = self._video_intent_key(user_id, session_id)
+        if key not in self._video_intent_sessions:
+            print("[DEBUG] 当前轮未检测到用户视频生成意图，忽略 GEN_VIDEO 标签")
+            return cleaned_text or response, None
+        self._video_intent_sessions.pop(key, None)
+
+        video_mgr = self._get_user_video_gen_manager(user_id) or self.video_gen_manager
+        if not video_mgr:
+            print("[DEBUG] 视频生成管理器未启用，忽略视频请求")
+            return cleaned_text or response, None
+
+        try:
+            video_url = await self.generate_video(video_prompt, user_id=user_id, session_id=session_id)
+            if video_url:
+                print(f"[Bot] 成功生成视频: {video_prompt}")
+                return cleaned_text or response, video_url
+            print("[Bot] 视频生成失败，返回纯文本")
+            return cleaned_text or response, None
+        except Exception as e:
+            print(f"[Bot] 处理视频生成时出错: {e}")
+            return cleaned_text or response, None
+
+    def get_last_generated_video(self) -> Optional[Dict[str, Any]]:
+        """获取并清除最近生成的视频数据。"""
+        video_data = self._last_generated_video
+        self._last_generated_video = None
+        return video_data
+
     def get_image_gen_config(self) -> Dict[str, Any]:
         """获取图像生成配置"""
         if not self.image_gen_manager:
             return {}
         return self.image_gen_manager.config.dict()
+
+    def get_video_gen_config(self) -> Dict[str, Any]:
+        """获取视频生成配置"""
+        if not self.video_gen_manager:
+            return {}
+        return self.video_gen_manager.config.dict()
     
     def update_image_gen_config(self, config_dict: Dict[str, Any]):
         """更新图像生成配置"""
@@ -1890,6 +2087,31 @@ class Bot:
         except Exception as e:
             print(f"更新图像生成配置失败: {str(e)}")
             raise e
+
+    def update_video_gen_config(self, config_dict: Dict[str, Any]):
+        """更新视频生成配置"""
+        if not self.video_gen_manager:
+            self.video_gen_manager = VideoGenerationManager(VideoGenerationConfig())
+        try:
+            current_config = self.video_gen_manager.config.dict()
+            merged_config = self._deep_merge_config(current_config, config_dict)
+            new_config = VideoGenerationConfig(**merged_config)
+            self.video_gen_manager.update_config(new_config)
+            config.update_config('video_generation', merged_config)
+            print(f"视频生成配置已更新并保存: {merged_config}")
+        except Exception as e:
+            print(f"更新视频生成配置失败: {str(e)}")
+            raise e
+
+    async def test_video_gen_connection(self, user_id: Optional[str] = None) -> bool:
+        """测试视频生成连接。传入 user_id 时使用该用户的覆盖配置。"""
+        video_mgr = self.video_gen_manager
+        if user_id:
+            await self._get_user_config(user_id)
+            video_mgr = self._get_user_video_gen_manager(user_id) or self.video_gen_manager
+        if not video_mgr:
+            return False
+        return await video_mgr.test_connection()
     
     async def test_image_gen_connection(self) -> bool:
         """测试图像生成连接"""

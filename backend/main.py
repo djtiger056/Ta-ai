@@ -47,6 +47,7 @@ from backend.api.chat import router as chat_router
 from backend.api.tts import router as tts_router
 from backend.api.asr import router as asr_router
 from backend.api.image_gen import router as image_gen_router
+from backend.api.video_gen import router as video_gen_router
 from backend.api.memory import router as memory_router
 from backend.api.vision import router as vision_router
 from backend.api.prompt_enhancer import router as prompt_enhancer_router
@@ -104,6 +105,7 @@ app.include_router(chat_router)
 app.include_router(tts_router)
 app.include_router(asr_router)
 app.include_router(image_gen_router)
+app.include_router(video_gen_router)
 app.include_router(memory_router)
 app.include_router(vision_router)
 app.include_router(mcp_router)
@@ -156,9 +158,37 @@ def _start_adapters_in_background() -> bool:
         return True
 
 
+def _has_interactive_stdin() -> bool:
+    """Return True when the process has a usable interactive stdin."""
+    stdin = getattr(sys, "stdin", None)
+    try:
+        return bool(stdin and stdin.isatty())
+    except Exception:
+        return False
+
+
+async def _warm_up_shared_bot() -> Bot:
+    """Create shared runtime resources before the first user request arrives."""
+    await user_manager.init_db()
+    print("✓ 用户数据库已初始化")
+
+    from backend.api.bot_provider import get_bot
+    bot = get_bot()
+
+    if bot.memory_manager:
+        try:
+            await bot._ensure_memory_manager_initialized()
+            print("✓ 记忆系统已预热")
+        except Exception as e:
+            print(f"⚠️ 记忆系统预热失败，将在首次使用时重试: {e}")
+
+    return bot
+
+
 @app.on_event("startup")
 async def on_startup():
     """无论通过哪种入口启动，都自动拉起适配器线程。"""
+    await _warm_up_shared_bot()
     if _start_adapters_in_background():
         print("✓ 适配器后台线程已启动")
     else:
@@ -194,11 +224,8 @@ if _frontend_dist.is_dir():
 async def start_adapters():
     """启动适配器与主动聊天调度器"""
     try:
-        # 初始化用户数据库
-        await user_manager.init_db()
-        print("✓ 用户数据库已初始化")
-
-        bot = Bot()
+        from backend.api.bot_provider import get_bot
+        bot = get_bot()
 
         # 通过统一的 bot_provider 设置全局 Bot 实例
         from backend.api.bot_provider import set_bot
@@ -220,7 +247,7 @@ async def start_adapters():
         # 初始化待办事项调度器
         reminder_scheduler: Optional[ReminderScheduler] = None
         reminder_cfg = config.get("reminder", {})
-        if reminder_cfg.get("enabled", True):
+        if reminder_cfg.get("enabled", False):
             reminder_scheduler = ReminderScheduler(
                 check_interval_seconds=reminder_cfg.get("check_interval", 60)
             )
@@ -268,8 +295,11 @@ async def start_adapters():
         console_adapter: Optional[ConsoleAdapter] = None
         console_config = adapters_config.get("console", {})
         if console_config.get("enabled", False):
-            console_adapter = ConsoleAdapter(bot)
-            print("🖥️ 控制台适配器已启用")
+            if _has_interactive_stdin():
+                console_adapter = ConsoleAdapter(bot)
+                print("🖥️ 控制台适配器已启用")
+            else:
+                print("ℹ️ 控制台适配器已配置启用，但当前进程没有交互式 stdin，已按服务模式跳过")
 
         # QQ 适配器
         qq_adapter: Optional[QQAdapter] = None
@@ -366,6 +396,8 @@ async def start_adapters():
             print("⏰ 待办事项调度器已启动")
             if reminder_scheduler.task:
                 tasks.append(reminder_scheduler.task)
+        else:
+            print("⏸️ 待办事项功能已停用，跳过调度器启动")
 
         if qq_adapter:
             tasks.append(asyncio.create_task(qq_adapter.start()))
@@ -393,6 +425,6 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host=server_config.get("host", "0.0.0.0"),
-        port=server_config.get("port", 8000),
+        port=server_config.get("port", 8003),
         log_level=log_level,
     )

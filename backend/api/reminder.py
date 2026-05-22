@@ -16,6 +16,11 @@ router = APIRouter(prefix="/api", tags=["reminder"])
 scheduler_instance = None
 
 
+def _reminder_feature_enabled() -> bool:
+    reminder_config = config.get("reminder", {}) or {}
+    return bool(reminder_config.get("enabled", False))
+
+
 class ReminderListRequest(BaseModel):
     """待办事项列表请求"""
     user_id: Optional[str] = None
@@ -49,6 +54,9 @@ class ReminderActionRequest(BaseModel):
 
 async def _get_memory_manager():
     """获取记忆管理器实例"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     bot = get_bot()
     if not bot or not bot.memory_manager:
         raise HTTPException(status_code=503, detail="记忆管理器未初始化")
@@ -74,6 +82,9 @@ async def get_reminder_list(
     limit: int = Query(default=100, ge=1, le=500, description="返回数量限制")
 ):
     """获取待办事项列表"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     try:
         memory_manager = await _get_memory_manager()
 
@@ -98,6 +109,9 @@ async def get_reminder_list(
 @router.post("/reminder/create")
 async def create_reminder(req: ReminderCreateRequest):
     """创建待办事项"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     try:
         memory_manager = await _get_memory_manager()
 
@@ -135,6 +149,9 @@ async def create_reminder(req: ReminderCreateRequest):
 @router.post("/reminder/{reminder_id}/action")
 async def reminder_action(reminder_id: int, req: ReminderActionRequest):
     """对待办事项执行操作（完成/取消）"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     try:
         memory_manager = await _get_memory_manager()
 
@@ -170,6 +187,9 @@ async def reminder_action(reminder_id: int, req: ReminderActionRequest):
 @router.get("/reminder/pending")
 async def get_pending_reminders():
     """获取待处理的待办事项（触发时间已到且状态为pending）"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     try:
         memory_manager = await _get_memory_manager()
 
@@ -203,6 +223,8 @@ async def get_reminder_config():
 async def update_reminder_config(cfg: Dict[str, Any]):
     """更新待办事项配置"""
     try:
+        if not _reminder_feature_enabled() and cfg.get("enabled", False):
+            raise HTTPException(status_code=403, detail="待办事项功能已暂时停用，无法启用")
         config.update_config("reminder", cfg)
         return {
             "success": True,
@@ -216,6 +238,9 @@ async def update_reminder_config(cfg: Dict[str, Any]):
 @router.post("/reminder/check")
 async def check_reminders():
     """手动检查待办事项（触发一次检查）"""
+    if not _reminder_feature_enabled():
+        raise HTTPException(status_code=503, detail="待办事项功能已暂时停用")
+
     try:
         if scheduler_instance is None:
             raise HTTPException(status_code=503, detail="待办事项调度器未启动")
@@ -238,7 +263,8 @@ async def get_reminder_status():
     try:
         return {
             "success": True,
-            "running": scheduler_instance is not None and scheduler_instance.is_running,
+            "running": False if not _reminder_feature_enabled() else (scheduler_instance is not None and scheduler_instance.is_running),
+            "enabled": _reminder_feature_enabled(),
             "check_interval": scheduler_instance.check_interval_seconds if scheduler_instance else None
         }
     except Exception as e:

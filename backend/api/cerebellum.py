@@ -36,11 +36,10 @@ class CerebellumConfigRequest(BaseModel):
     history_limit: Optional[int] = None
     replace_time_windows: Optional[bool] = None
     motivation_cooldown_seconds: Optional[int] = None
-    require_user_reengagement_after_dispatch: Optional[bool] = None
     baseline_values: Optional[Dict[str, float]] = None
     circadian: Optional[Dict[str, Any]] = None
     inactivity_stimulus: Optional[Dict[str, Any]] = None
-    autonomous_drift: Optional[Dict[str, Any]] = None
+    proactive_chat: Optional[Dict[str, Any]] = None
 
 
 def set_engine(engine: CerebellumEngine) -> None:
@@ -105,6 +104,15 @@ async def update_config(req: CerebellumConfigRequest):
     try:
         payload = {key: value for key, value in req.dict(exclude_none=True).items()}
         cfg = get_engine().reload_config(payload)
+        try:
+            from . import proactive as proactive_api
+
+            scheduler = proactive_api.scheduler_instance
+            if scheduler:
+                future = scheduler.run_coro_threadsafe(scheduler.reload_config())
+                future.result(timeout=3)
+        except Exception:
+            pass
         return {"message": "配置已更新", "config": cfg.to_dict()}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"更新小脑配置失败: {exc}")

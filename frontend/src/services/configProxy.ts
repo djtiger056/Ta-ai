@@ -18,7 +18,7 @@ function isCurrentUserAdmin(): boolean {
     const userStr = localStorage.getItem('user')
     if (userStr) {
       const user = JSON.parse(userStr)
-      return user.is_admin === 1
+      return user.is_admin === 1 || user.is_admin === true || user.is_admin === '1'
     }
   } catch (e) {
     // ignore
@@ -119,6 +119,34 @@ export const imageGenConfigProxy = {
 }
 
 /**
+ * 配置代理 - 视频生成
+ */
+export const videoGenConfigProxy = {
+  getConfig: async () => {
+    if (isCurrentUserAdmin()) {
+      const response = await api.get('/video-gen/config')
+      return response.data.data
+    } else {
+      const userConfig = await userConfigApi.getConfig()
+      if (userConfig.video_generation && Object.keys(userConfig.video_generation).length > 0) {
+        return userConfig.video_generation
+      }
+      const response = await api.get('/video-gen/config')
+      return response.data.data
+    }
+  },
+
+  updateConfig: async (config: any) => {
+    if (isCurrentUserAdmin()) {
+      const response = await api.post('/video-gen/config', config)
+      return response.data
+    } else {
+      await userConfigApi.updateConfig({ video_generation: config })
+    }
+  },
+}
+
+/**
  * 配置代理 - 视觉识别
  */
 export const visionConfigProxy = {
@@ -198,33 +226,6 @@ export const emoteConfigProxy = {
       return response.data
     } else {
       await userConfigApi.updateConfig({ emotes: config })
-    }
-  },
-}
-
-/**
- * 配置代理 - 主动聊天
- */
-export const proactiveConfigProxy = {
-  getConfig: async () => {
-    if (isCurrentUserAdmin()) {
-      const response = await api.get('/proactive/config')
-      return response.data.config
-    } else {
-      const userConfig = await userConfigApi.getConfig()
-      if (userConfig.proactive_chat && Object.keys(userConfig.proactive_chat).length > 0) {
-        return userConfig.proactive_chat
-      }
-      const response = await api.get('/proactive/config')
-      return response.data.config
-    }
-  },
-
-  updateConfig: async (config: any) => {
-    if (isCurrentUserAdmin()) {
-      await api.post('/proactive/config', config)
-    } else {
-      await userConfigApi.updateConfig({ proactive_chat: config })
     }
   },
 }

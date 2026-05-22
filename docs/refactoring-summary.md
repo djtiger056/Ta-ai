@@ -223,7 +223,7 @@ joy ≥ 0.68 → 生成"分享"动机
 ### 1. 验证情绪触发
 ```bash
 # 1. 启用情绪系统
-curl -X POST http://localhost:8002/api/cerebellum/config \
+curl -X POST http://localhost:8003/api/cerebellum/config \
   -H "Content-Type: application/json" \
   -d '{"enabled": true}'
 

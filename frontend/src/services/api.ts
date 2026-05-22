@@ -180,17 +180,58 @@ export const ttsApi = {
     }
   },
 
+  // 启航 AI：按当前表单配置检测并获取语音角色列表
+  getQihangVoices: async (config: {
+    api_base?: string
+    base_url?: string
+    api_key?: string
+    model?: string
+    voice?: string
+  }): Promise<VoiceCharacter[]> => {
+    try {
+      const response = await api.post('/tts/qihang/voices', config)
+      return response.data.data
+    } catch (error: any) {
+      console.error('检测启航AI语音角色错误:', error)
+      throw error
+    }
+  },
+
   // 合成语音
-  synthesize: async (text: string, voice?: string): Promise<Blob> => {
+  synthesize: async (
+    text: string,
+    voice?: string,
+    options?: {
+      provider?: string
+      qihang?: {
+        api_base?: string
+        base_url?: string
+        api_key?: string
+        model?: string
+        voice?: string
+      }
+    }
+  ): Promise<Blob> => {
     try {
       const response = await api.post('/tts/synthesize', {
         text,
-        voice
+        voice,
+        ...options,
       }, {
         responseType: 'blob'
       })
       return response.data
     } catch (error: any) {
+      const data = error?.response?.data
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text()
+          const parsed = JSON.parse(text)
+          error.response.data = parsed
+        } catch {
+          // keep original error when the server did not return JSON
+        }
+      }
       console.error('语音合成错误:', error)
       throw error
     }
@@ -342,6 +383,48 @@ export const imageGenApi = {
   deleteBaseImage: async (): Promise<{ success: boolean; message: string }> => {
     const response = await api.delete('/image-gen/base-image')
     return response.data
+  },
+}
+
+export const videoGenApi = {
+  getVideoGenConfig: async (): Promise<any> => {
+    try {
+      const response = await api.get('/video-gen/config')
+      return response.data.data
+    } catch (error: any) {
+      console.error('获取视频生成配置错误:', error)
+      throw error
+    }
+  },
+
+  updateVideoGenConfig: async (config: any): Promise<void> => {
+    try {
+      const response = await api.post('/video-gen/config', config)
+      console.log('视频生成配置更新成功:', response.data)
+    } catch (error: any) {
+      console.error('更新视频生成配置错误:', error)
+      throw error
+    }
+  },
+
+  generateVideo: async (prompt: string): Promise<{ success: boolean; message: string; video_url?: string }> => {
+    try {
+      const response = await api.post('/video-gen/generate', { prompt }, { timeout: 650000 })
+      return response.data
+    } catch (error: any) {
+      console.error('视频生成错误:', error)
+      throw error
+    }
+  },
+
+  testVideoGenConnection: async (): Promise<boolean> => {
+    try {
+      const response = await api.post('/video-gen/test-connection', {}, { timeout: 30000 })
+      return response.data.success
+    } catch (error: any) {
+      console.error('视频生成连接测试错误:', error)
+      return false
+    }
   },
 }
 
@@ -568,7 +651,10 @@ export const memoryApi = {
   },
 
   // 获取用户ID列表
-  getMemoryUsers: async (): Promise<{ user_ids: string[]; user_info?: { user_id: string; display_name: string; selector_key?: string }[] }> => {
+  getMemoryUsers: async (): Promise<{
+    user_ids: string[]
+    user_info?: { user_id: string; display_name: string; selector_key?: string; channel?: string }[]
+  }> => {
     try {
       const response = await api.get('/memory/users')
       return response.data
@@ -893,6 +979,7 @@ export interface UserConfig {
   llm?: Record<string, any>
   tts?: Record<string, any>
   image_generation?: Record<string, any>
+  video_generation?: Record<string, any>
   vision?: Record<string, any>
   prompt_enhancer?: Record<string, any>
   emotes?: Record<string, any>

@@ -616,6 +616,31 @@ const AdminGlobalConfigPage: React.FC = () => {
                 ),
               },
 
+              // ── 视频生成 ──────────────────────────────────────────
+              {
+                key: 'video',
+                label: '视频生成',
+                children: (
+                  <>
+                    <Form.Item name={['video_generation', 'enabled']} label="启用视频生成" valuePropName="checked">
+                      <Switch />
+                    </Form.Item>
+                    <Form.Item name={['video_generation', 'video_api', 'api_base']} label="视频 API 地址">
+                      <Input placeholder="http://127.0.0.1:18080" />
+                    </Form.Item>
+                    <Form.Item name={['video_generation', 'video_api', 'api_key']} label="视频 API Key">
+                      <Input.Password placeholder="未开启鉴权可留空" />
+                    </Form.Item>
+                    <Form.Item name={['video_generation', 'video_api', 'model']} label="视频模型">
+                      <Input placeholder="wan2.7-t2v" />
+                    </Form.Item>
+                    <Form.Item name={['video_generation', 'trigger_keywords']} label="触发关键词">
+                      <Select mode="tags" placeholder="输入关键词后回车" />
+                    </Form.Item>
+                  </>
+                ),
+              },
+
               // ── 视觉识别 ──────────────────────────────────────────
               {
                 key: 'vision',

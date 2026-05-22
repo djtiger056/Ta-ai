@@ -88,6 +88,13 @@ class Config:
         from backend.image_gen.config import ImageGenerationConfig
         image_gen_dict = self._config.get('image_generation', {})
         return ImageGenerationConfig(**image_gen_dict)
+
+    @property
+    def video_gen_config(self):
+        """获取视频生成配置"""
+        from backend.video_gen.config import VideoGenerationConfig
+        video_gen_dict = self._config.get('video_generation', {})
+        return VideoGenerationConfig(**video_gen_dict)
     
     @property
     def vision_config(self):
@@ -150,6 +157,11 @@ class Config:
     @property
     def proactive_chat_config(self) -> Dict[str, Any]:
         """获取主动聊天配置"""
+        cerebellum_cfg = self._config.get('cerebellum', {})
+        if isinstance(cerebellum_cfg, dict):
+            proactive_cfg = cerebellum_cfg.get('proactive_chat')
+            if isinstance(proactive_cfg, dict):
+                return proactive_cfg
         return self._config.get('proactive_chat', {})
 
     @property

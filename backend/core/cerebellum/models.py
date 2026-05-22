@@ -54,6 +54,35 @@ DEFAULT_CIRCADIAN: Dict[str, Any] = {
     },
 }
 
+DEFAULT_PROACTIVE_CHAT: Dict[str, Any] = {
+    "enabled": False,
+    "timezone": "Asia/Shanghai",
+    "check_interval_seconds": 60,
+    "default_prompt": "",
+    "behavior_rules": {
+        "enabled": True,
+        "global_cooldown_seconds": 1800,
+        "inactive_greeting": {
+            "enabled": True,
+            "after_seconds": 21600,
+            "min_user_messages": 1,
+            "instruction": "",
+        },
+        "conversation_follow_up": {
+            "enabled": True,
+            "after_seconds": 900,
+            "min_user_messages": 1,
+            "instruction": "",
+        },
+    },
+    "message_templates": [],
+    "image_generation": {
+        "enabled": False,
+        "max_per_day": 3,
+    },
+    "targets": [],
+}
+
 
 def clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
     return max(minimum, min(maximum, float(value)))
@@ -141,7 +170,7 @@ class CerebellumConfigData:
     history_limit: int = 2880
     replace_time_windows: bool = True
     motivation_cooldown_seconds: int = 1800
-    require_user_reengagement_after_dispatch: bool = True
+    proactive_chat: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_PROACTIVE_CHAT))
     baseline_values: Dict[str, float] = field(default_factory=lambda: dict(DEFAULT_BASELINES))
     circadian: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_CIRCADIAN))
     inactivity_stimulus: Dict[str, Any] = field(default_factory=lambda: {
@@ -178,7 +207,7 @@ class CerebellumConfigData:
             "history_limit": self.history_limit,
             "replace_time_windows": self.replace_time_windows,
             "motivation_cooldown_seconds": self.motivation_cooldown_seconds,
-            "require_user_reengagement_after_dispatch": self.require_user_reengagement_after_dispatch,
+            "proactive_chat": self.proactive_chat,
             "baseline_values": {key: round(clamp(value), 4) for key, value in self.baseline_values.items()},
             "circadian": self.circadian,
             "inactivity_stimulus": self.inactivity_stimulus,

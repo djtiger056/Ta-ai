@@ -8,6 +8,7 @@ import {
   RobotOutlined,
   SoundOutlined,
   PictureOutlined,
+  VideoCameraOutlined,
   DatabaseOutlined,
   EyeOutlined,
   BellOutlined,
@@ -29,6 +30,7 @@ import UserSettingsPage from './pages/UserSettingsPage'
 import PersonalityPage from './pages/PersonalityPage'
 import TTSConfigPage from './pages/TTSConfigPage.tsx'
 import ImageGenPage from './pages/ImageGenPage'
+import VideoGenPage from './pages/VideoGenPage'
 import MemoryPage from './pages/MemoryPage'
 import VisionPage from './pages/VisionPage'
 import { useNavigate, useLocation } from 'react-router-dom'
@@ -84,6 +86,11 @@ const MainLayout: React.FC = () => {
       key: '/image-gen',
       icon: <PictureOutlined />,
       label: '图像生成',
+    },
+    {
+      key: '/video-gen',
+      icon: <VideoCameraOutlined />,
+      label: '视频生成',
     },
     {
       key: '/prompt-enhancer',
@@ -244,6 +251,7 @@ const MainLayout: React.FC = () => {
             <Route path="/roleplay-mode" element={<RoleplayModePage />} />
             <Route path="/tts" element={<TTSConfigPage />} />
             <Route path="/image-gen" element={<ImageGenPage />} />
+            <Route path="/video-gen" element={<VideoGenPage />} />
             <Route path="/prompt-enhancer" element={<PromptEnhancerPage />} />
             <Route path="/emotes" element={<EmotePage />} />
             <Route path="/daily-schedule" element={<DailySchedulePage />} />

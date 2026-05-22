@@ -52,6 +52,12 @@ async def chat(request: ChatRequest):
             image_base64 = base64.b64encode(last_image["image_data"]).decode('utf-8')
             print(f"[Chat API] 返回生成的图片，大小: {len(last_image['image_data'])} bytes")
 
+        last_video = bot.get_last_generated_video()
+        video_url = None
+        if last_video and last_video.get("video_url"):
+            video_url = last_video["video_url"]
+            print(f"[Chat API] 返回生成的视频: {video_url}")
+
         # 尝试合成语音（优先 AI 主动触发，否则走概率）
         try:
             forced_tts = bot.get_last_tts_forced()
@@ -105,7 +111,8 @@ async def chat(request: ChatRequest):
             "audio_mime": audio_mime,
             "voice_only": bool(audio_base64 and voice_only),
             "emote": emote_payload,
-            "image": image_base64
+            "image": image_base64,
+            "video": video_url,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"聊天失败: {str(e)}")
@@ -142,11 +149,14 @@ async def chat_stream(request: ChatRequest):
 
             # 流式输出文本
             async for chunk in bot.chat_stream(request.message, request.user_id, session_id=session_id):
+                if chunk is None:
+                    continue
                 if not first_chunk_seen:
                     yield meta_event("first_model_chunk")
                     first_chunk_seen = True
-                full_response += chunk
-                yield f"data: {json.dumps({'content': chunk})}\n\n"
+                chunk_text = str(chunk)
+                full_response += chunk_text
+                yield f"data: {json.dumps({'content': chunk_text})}\n\n"
 
             yield meta_event("llm_stream_done", {"response_chars": len(full_response)})
             proactive_api.record_assistant_activity("web", request.user_id, session_id, full_response)
@@ -163,6 +173,12 @@ async def chat_stream(request: ChatRequest):
                 image_base64 = base64.b64encode(last_image["image_data"]).decode('utf-8')
                 print(f"[Chat Stream API] 返回生成的图片，大小: {len(last_image['image_data'])} bytes")
                 yield f"data: {json.dumps({'image': image_base64})}\n\n"
+
+            last_video = bot.get_last_generated_video()
+            if last_video and last_video.get("video_url"):
+                video_url = last_video["video_url"]
+                print(f"[Chat Stream API] 返回生成的视频: {video_url}")
+                yield f"data: {json.dumps({'video': video_url}, ensure_ascii=False)}\n\n"
 
             # 完成文本输出后，尝试合成语音（优先 AI 主动触发）
             try:

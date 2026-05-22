@@ -2,26 +2,125 @@
 记忆系统API端点
 """
 
-from fastapi import APIRouter, HTTPException, Query, Body
-from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
 import json
+import re
+from typing import List, Dict, Any, Optional
+
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
+from pydantic import BaseModel
 
 from ..config import config
 from ..memory import MemoryManager, MemoryConfig, MemoryItem, MemorySummary
+from ..user import auth_manager, user_manager
+from .deps import get_access_token
 
 router = APIRouter(prefix="/api", tags=["memory"])
 
 # 共享MemoryManager实例
 _memory_manager = None
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12}$"
+)
 
 
-def _build_memory_user_display(user: Any, fallback_user_id: str) -> str:
-    """构造记忆系统用户展示串：项目用户名 + QQ号 + Linyu账号。"""
-    username = str(getattr(user, "nickname", None) or getattr(user, "username", None) or fallback_user_id).strip()
-    qq_id = str(getattr(user, "qq_user_id", None) or "").strip() or "-"
-    linyu_account = str(getattr(user, "linyu_account", None) or getattr(user, "linyu_user_id", None) or "").strip() or "-"
-    return f"{username} | QQ:{qq_id} | Linyu:{linyu_account}"
+def _get_project_username(user: Any, fallback: str = "当前用户") -> str:
+    return str(getattr(user, "username", None) or getattr(user, "nickname", None) or fallback).strip()
+
+
+def _sanitize_linyu_account(user: Any) -> str:
+    account = str(getattr(user, "linyu_account", None) or "").strip()
+    if account and account != "-" and not _UUID_RE.fullmatch(account) and not account.endswith("..."):
+        return account
+    return "已绑定账号"
+
+
+def _build_memory_identity_display(user: Any, channel: str) -> str:
+    username = _get_project_username(user)
+    if channel == "qq":
+        qq_id = str(getattr(user, "qq_user_id", None) or "").strip()
+        return f"{username} | QQ:{qq_id}"
+    if channel == "linyu":
+        return f"{username} | Linyu:{_sanitize_linyu_account(user)}"
+    raise ValueError(f"不支持的记忆渠道: {channel}")
+
+
+async def _get_authenticated_user(token: str) -> Any:
+    if not token:
+        raise HTTPException(status_code=401, detail="缺少令牌")
+
+    user_info = auth_manager.get_user_from_token(token)
+    if not user_info:
+        raise HTTPException(status_code=401, detail="无效的令牌")
+
+    user = await user_manager.get_user_by_id(user_info["user_id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    return user
+
+
+def _get_accessible_memory_entries(user: Any) -> List[Dict[str, str]]:
+    entries: List[Dict[str, str]] = []
+
+    qq_user_id = str(getattr(user, "qq_user_id", None) or "").strip()
+    if qq_user_id:
+        display_name = _build_memory_identity_display(user, "qq")
+        entries.append({
+            "user_id": qq_user_id,
+            "display_name": display_name,
+            "selector_key": display_name,
+            "channel": "qq",
+        })
+
+    linyu_user_id = str(getattr(user, "linyu_user_id", None) or "").strip()
+    if linyu_user_id:
+        display_name = _build_memory_identity_display(user, "linyu")
+        entries.append({
+            "user_id": linyu_user_id,
+            "display_name": display_name,
+            "selector_key": display_name,
+            "channel": "linyu",
+        })
+
+    return entries
+
+
+def _get_accessible_memory_user_ids(user: Any) -> set[str]:
+    return {entry["user_id"] for entry in _get_accessible_memory_entries(user)}
+
+
+def _ensure_user_id_access(user: Any, user_id: str, field_name: str = "user_id") -> str:
+    requested = str(user_id or "").strip()
+    allowed_ids = _get_accessible_memory_user_ids(user)
+    if not requested or requested not in allowed_ids:
+        raise HTTPException(status_code=403, detail=f"无权访问该{field_name}对应的记忆")
+    return requested
+
+
+def _ensure_session_access(user: Any, session_id: Optional[str]) -> Optional[str]:
+    if session_id is None:
+        return None
+    return _ensure_user_id_access(user, session_id, "session_id")
+
+
+async def _ensure_memory_owner_access(manager: Any, user: Any, memory_id: str) -> None:
+    vector_store = getattr(manager, "vector_store", None)
+    collection = getattr(vector_store, "collection", None)
+    if collection is None:
+        return
+
+    result = collection.get(ids=[memory_id], include=["metadatas"])
+    ids = result.get("ids") or []
+    if not ids:
+        raise HTTPException(status_code=404, detail="记忆未找到")
+
+    metadatas = result.get("metadatas") or []
+    owner_user_id = str((metadatas[0] or {}).get("user_id") or "").strip() if metadatas else ""
+    _ensure_user_id_access(user, owner_user_id)
 
 
 def _split_roleplay_memory_user_id(user_id: str) -> tuple[str, bool]:
@@ -137,41 +236,15 @@ async def update_memory_config(request: UpdateMemoryConfigRequest):
 
 
 @router.get("/memory/users")
-async def get_memory_users():
-    """获取所有有记忆的用户ID列表，附带用户名/昵称信息"""
+async def get_memory_users(token: str = Depends(get_access_token)):
+    """仅返回当前登录用户可访问的记忆身份。"""
     try:
-        manager = await ensure_memory_manager_initialized()
-        user_ids = await manager.get_all_user_ids()
-
-        # 尝试从用户管理器获取用户名映射
-        user_info_list = []
-        try:
-            from backend.user import user_manager
-            for uid in user_ids:
-                base_uid, is_roleplay = _split_roleplay_memory_user_id(uid)
-                info = {"user_id": uid, "display_name": uid, "selector_key": uid}
-                # 尝试按 qq_user_id 查找
-                user = await user_manager.get_user_by_qq_id(base_uid)
-                if not user and base_uid.isdigit():
-                    user = await user_manager.get_user_by_id(int(base_uid))
-                if not user:
-                    # 尝试按 username 查找
-                    user = await user_manager.get_user_by_username(base_uid)
-                if user:
-                    display_name = _build_memory_user_display(user, uid)
-                    if is_roleplay:
-                        display_name = f"{display_name}（情景演绎）"
-                    info["display_name"] = display_name
-                    info["selector_key"] = display_name
-                elif is_roleplay:
-                    info["display_name"] = f"{base_uid}（情景演绎）"
-                    info["selector_key"] = info["display_name"]
-                user_info_list.append(info)
-        except Exception:
-            # 如果用户管理器不可用，回退到纯 ID 列表
-            user_info_list = [{"user_id": uid, "display_name": uid, "selector_key": uid} for uid in user_ids]
-
+        user = await _get_authenticated_user(token)
+        user_info_list = _get_accessible_memory_entries(user)
+        user_ids = [entry["user_id"] for entry in user_info_list]
         return {"user_ids": user_ids, "user_info": user_info_list}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取用户ID列表失败: {str(e)}")
 
@@ -191,13 +264,19 @@ async def get_memory_stats():
 async def get_short_term_memories(
     user_id: str = Query(..., description="用户ID"),
     session_id: str = Query(..., description="会话ID"),
-    limit: int = Query(50, description="最大返回数量")
+    limit: int = Query(50, description="最大返回数量"),
+    token: str = Depends(get_access_token),
 ):
     """获取短期记忆（对话历史）"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
+        session_id = _ensure_session_access(user, session_id) or user_id
         manager = await ensure_memory_manager_initialized()
         memories = await manager.get_short_term_memories(user_id, session_id, limit)
         return {"memories": memories}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取短期记忆失败: {str(e)}")
 
@@ -206,15 +285,21 @@ async def get_short_term_memories(
 async def get_pending_memories(
     user_id: str = Query(..., description="用户ID"),
     session_id: str = Query(..., description="会话ID"),
-    limit: int = Query(100, description="最大返回数量")
+    limit: int = Query(100, description="最大返回数量"),
+    token: str = Depends(get_access_token),
 ):
     """获取待处理区原文（超过短期窗口的对话原文）"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
+        session_id = _ensure_session_access(user, session_id) or user_id
         manager = await ensure_memory_manager_initialized()
         if not hasattr(manager, "get_pending_memories"):
             raise HTTPException(status_code=500, detail="当前记忆管理器不支持待处理区")
         memories = await manager.get_pending_memories(user_id=user_id, session_id=session_id, limit=limit)
         return {"memories": memories}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取待处理区失败: {str(e)}")
 
@@ -222,10 +307,14 @@ async def get_pending_memories(
 @router.post("/memory/pending/summarize")
 async def summarize_pending_memories(
     user_id: str = Query(..., description="用户ID"),
-    session_id: str = Query(..., description="会话ID")
+    session_id: str = Query(..., description="会话ID"),
+    token: str = Depends(get_access_token),
 ):
     """手动触发：摘要待处理区（若不足一个chunk则无操作）"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
+        session_id = _ensure_session_access(user, session_id) or user_id
         manager = await ensure_memory_manager_initialized()
         if not hasattr(manager, "summarize_pending_now"):
             raise HTTPException(status_code=500, detail="当前记忆管理器不支持待处理区摘要")
@@ -233,6 +322,8 @@ async def summarize_pending_memories(
         if isinstance(result, dict):
             return result
         return {"ok": bool(result), "processed": bool(result), "force": True}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"触发待处理区摘要失败: {str(e)}")
 
@@ -241,13 +332,19 @@ async def summarize_pending_memories(
 async def get_mid_term_memories(
     user_id: str = Query(..., description="用户ID"),
     session_id: Optional[str] = Query(None, description="会话ID（可选）"),
-    limit: int = Query(10, description="最大返回数量")
+    limit: int = Query(10, description="最大返回数量"),
+    token: str = Depends(get_access_token),
 ):
     """获取中期记忆（对话摘要）"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
+        session_id = _ensure_session_access(user, session_id)
         manager = await ensure_memory_manager_initialized()
         summaries = await manager.get_mid_term_summaries(user_id, session_id, limit)
         return {"summaries": summaries}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取中期记忆失败: {str(e)}")
 
@@ -255,21 +352,28 @@ async def get_mid_term_memories(
 @router.get("/memory/long-term")
 async def get_long_term_memories(
     user_id: str = Query(..., description="用户ID"),
-    limit: int = Query(100, description="最大返回数量")
+    limit: int = Query(100, description="最大返回数量"),
+    token: str = Depends(get_access_token),
 ):
     """获取长期记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
         manager = await ensure_memory_manager_initialized()
         memories = await manager.get_long_term_memories(user_id, limit)
         return {"memories": memories}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取长期记忆失败: {str(e)}")
 
 
 @router.post("/memory/long-term/search")
-async def search_long_term_memories(request: SearchMemoriesRequest):
+async def search_long_term_memories(request: SearchMemoriesRequest, token: str = Depends(get_access_token)):
     """搜索长期记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
         manager = await ensure_memory_manager_initialized()
         memories = await manager.search_long_term_memories(
             user_id=request.user_id,
@@ -278,14 +382,18 @@ async def search_long_term_memories(request: SearchMemoriesRequest):
             score_threshold=request.score_threshold
         )
         return {"memories": memories}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"搜索长期记忆失败: {str(e)}")
 
 
 @router.post("/memory/long-term")
-async def add_long_term_memory(request: AddLongTermMemoryRequest):
+async def add_long_term_memory(request: AddLongTermMemoryRequest, token: str = Depends(get_access_token)):
     """手动添加长期记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
         manager = await ensure_memory_manager_initialized()
         success = await manager.add_long_term_memory(
             user_id=request.user_id,
@@ -298,17 +406,21 @@ async def add_long_term_memory(request: AddLongTermMemoryRequest):
             return {"message": "长期记忆添加成功"}
         else:
             raise HTTPException(status_code=500, detail="长期记忆添加失败")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"添加长期记忆失败: {str(e)}")
 
 
 @router.delete("/memory/long-term/{memory_id}")
-async def delete_long_term_memory(memory_id: str):
+async def delete_long_term_memory(memory_id: str, token: str = Depends(get_access_token)):
     """删除长期记忆（简化实现，实际需要用户验证）"""
     try:
+        user = await _get_authenticated_user(token)
         manager = await ensure_memory_manager_initialized()
         if getattr(manager.config, "long_term_strategy", "local").lower() == "external":
             raise HTTPException(status_code=501, detail="外部记忆暂不支持删除操作")
+        await _ensure_memory_owner_access(manager, user, memory_id)
 
         # 兼容不同类型的记忆管理器
         if hasattr(manager, 'vector_store') and manager.vector_store:
@@ -323,20 +435,37 @@ async def delete_long_term_memory(memory_id: str):
             return {"message": "记忆删除成功"}
         else:
             raise HTTPException(status_code=404, detail="记忆未找到")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"删除记忆失败: {str(e)}")
 
 
 @router.put("/memory/long-term/{memory_id}")
-async def update_long_term_memory(memory_id: str, request: UpdateLongTermMemoryRequest):
+async def update_long_term_memory(
+    memory_id: str,
+    request: UpdateLongTermMemoryRequest,
+    token: str = Depends(get_access_token),
+):
     """更新长期记忆（编辑内容和重要性）"""
     try:
+        user = await _get_authenticated_user(token)
         manager = await ensure_memory_manager_initialized()
         if getattr(manager.config, "long_term_strategy", "local").lower() == "external":
             raise HTTPException(status_code=501, detail="外部记忆暂不支持更新操作")
+        await _ensure_memory_owner_access(manager, user, memory_id)
 
         # 兼容不同类型的记忆管理器
-        if hasattr(manager, '_update_long_term_memory_by_id'):
+        if hasattr(manager, 'vector_store') and manager.vector_store:
+            update_metadata = dict(request.metadata or {})
+            if request.importance is not None:
+                update_metadata["importance"] = request.importance
+            success = await manager.vector_store.update_memory(
+                memory_id=memory_id,
+                content=request.content,
+                metadata=update_metadata or None,
+            )
+        elif hasattr(manager, '_update_long_term_memory_by_id'):
             success = await manager._update_long_term_memory_by_id(
                 memory_id=memory_id,
                 content=request.content,
@@ -350,6 +479,8 @@ async def update_long_term_memory(memory_id: str, request: UpdateLongTermMemoryR
             return {"message": "记忆更新成功"}
         else:
             raise HTTPException(status_code=404, detail="记忆未找到")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新记忆失败: {str(e)}")
 
@@ -358,13 +489,17 @@ async def update_long_term_memory(memory_id: str, request: UpdateLongTermMemoryR
 async def batch_add_short_term_memories(
     user_id: str = Query(..., description="用户ID"),
     session_id: str = Query(..., description="会话ID"),
-    messages: List[Dict[str, Any]] = Body(..., description="消息列表")
+    messages: List[Dict[str, Any]] = Body(..., description="消息列表"),
+    token: str = Depends(get_access_token),
 ):
     """批量添加短期记忆"""
     try:
         from ..memory.models import ConversationMessage
         from datetime import datetime
 
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
+        session_id = _ensure_session_access(user, session_id) or user_id
         manager = await ensure_memory_manager_initialized()
 
         # 转换消息格式
@@ -383,14 +518,18 @@ async def batch_add_short_term_memories(
         )
 
         return {"message": f"已批量添加 {count} 条短期记忆", "count": count}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量添加短期记忆失败: {str(e)}")
 
 
 @router.post("/memory/batch/add-long-term")
-async def batch_add_long_term_memories(request: BatchAddLongTermMemoriesRequest):
+async def batch_add_long_term_memories(request: BatchAddLongTermMemoriesRequest, token: str = Depends(get_access_token)):
     """批量添加长期记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
         manager = await ensure_memory_manager_initialized()
 
         # 兼容不同类型的记忆管理器
@@ -402,14 +541,19 @@ async def batch_add_long_term_memories(request: BatchAddLongTermMemoriesRequest)
             return {"message": f"已批量添加 {count} 条长期记忆", "count": count}
         else:
             raise HTTPException(status_code=500, detail="当前记忆管理器不支持批量添加操作")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量添加长期记忆失败: {str(e)}")
 
 
 @router.post("/memory/batch/delete-short-term")
-async def batch_delete_short_term_memories(request: BatchDeleteShortTermMemoriesRequest):
+async def batch_delete_short_term_memories(request: BatchDeleteShortTermMemoriesRequest, token: str = Depends(get_access_token)):
     """批量删除短期记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
+        request.session_id = _ensure_session_access(user, request.session_id)
         manager = await ensure_memory_manager_initialized()
 
         from datetime import datetime
@@ -424,14 +568,19 @@ async def batch_delete_short_term_memories(request: BatchDeleteShortTermMemories
         )
 
         return {"message": f"已批量删除 {count} 条短期记忆", "count": count}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"批量删除短期记忆失败: {str(e)}")
 
 
 @router.post("/memory/clear")
-async def clear_memories(request: ClearMemoriesRequest):
+async def clear_memories(request: ClearMemoriesRequest, token: str = Depends(get_access_token)):
     """清除记忆"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
+        request.session_id = _ensure_session_access(user, request.session_id)
         manager = await ensure_memory_manager_initialized()
         success = await manager.clear_all_memories(
             user_id=request.user_id,
@@ -442,6 +591,8 @@ async def clear_memories(request: ClearMemoriesRequest):
             return {"message": "记忆清除成功"}
         else:
             raise HTTPException(status_code=500, detail="记忆清除失败")
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"清除记忆失败: {str(e)}")
 
@@ -478,13 +629,18 @@ async def external_memory_ping():
 
 @router.get("/memory/external/profiles")
 async def get_external_profiles(
-    user_id: str = Query(..., description="用户ID")
+    user_id: str = Query(..., description="用户ID"),
+    token: str = Depends(get_access_token),
 ):
     """获取外部记忆画像"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
         manager = await ensure_memory_manager_initialized()
         profiles = await manager.get_external_profiles(user_id=user_id)
         return {"profiles": profiles}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取外部画像失败: {str(e)}")
 
@@ -493,21 +649,28 @@ async def get_external_profiles(
 async def get_external_events(
     user_id: str = Query(..., description="用户ID"),
     limit: int = Query(10, description="最大返回数量"),
-    query: Optional[str] = Query(None, description="检索关键词（可选）")
+    query: Optional[str] = Query(None, description="检索关键词（可选）"),
+    token: str = Depends(get_access_token),
 ):
     """获取外部记忆事件"""
     try:
+        user = await _get_authenticated_user(token)
+        user_id = _ensure_user_id_access(user, user_id)
         manager = await ensure_memory_manager_initialized()
         events = await manager.get_external_events(user_id=user_id, limit=limit, query=query)
         return {"events": events}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取外部事件失败: {str(e)}")
 
 
 @router.post("/memory/external/context")
-async def get_external_context(request: ExternalContextRequest):
+async def get_external_context(request: ExternalContextRequest, token: str = Depends(get_access_token)):
     """获取外部记忆上下文"""
     try:
+        user = await _get_authenticated_user(token)
+        request.user_id = _ensure_user_id_access(user, request.user_id)
         manager = await ensure_memory_manager_initialized()
         prefer_topics = request.prefer_topics
         if prefer_topics is None:
@@ -519,5 +682,7 @@ async def get_external_context(request: ExternalContextRequest):
             customize_context_prompt=request.customize_context_prompt
         )
         return {"context": context}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取外部上下文失败: {str(e)}")

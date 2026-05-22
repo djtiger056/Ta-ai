@@ -17,10 +17,10 @@ class UserConfigResponse(BaseModel):
     llm: Optional[Dict[str, Any]] = None
     tts: Optional[Dict[str, Any]] = None
     image_generation: Optional[Dict[str, Any]] = None
+    video_generation: Optional[Dict[str, Any]] = None
     vision: Optional[Dict[str, Any]] = None
     prompt_enhancer: Optional[Dict[str, Any]] = None
     emotes: Optional[Dict[str, Any]] = None
-    proactive_chat: Optional[Dict[str, Any]] = None
     adapters: Optional[Dict[str, Any]] = None
     preferences: Optional[Dict[str, Any]] = None
 
@@ -31,10 +31,10 @@ class UpdateUserConfigRequest(BaseModel):
     llm: Optional[Dict[str, Any]] = Field(default=None, description="LLM配置")
     tts: Optional[Dict[str, Any]] = Field(default=None, description="TTS配置")
     image_generation: Optional[Dict[str, Any]] = Field(default=None, description="图像生成配置")
+    video_generation: Optional[Dict[str, Any]] = Field(default=None, description="视频生成配置")
     vision: Optional[Dict[str, Any]] = Field(default=None, description="视觉识别配置")
     prompt_enhancer: Optional[Dict[str, Any]] = Field(default=None, description="提示词增强配置")
     emotes: Optional[Dict[str, Any]] = Field(default=None, description="表情包配置")
-    proactive_chat: Optional[Dict[str, Any]] = Field(default=None, description="主动聊天配置")
     adapters: Optional[Dict[str, Any]] = Field(default=None, description="适配器配置")
     preferences: Optional[Dict[str, Any]] = Field(default=None, description="其他偏好设置")
 
@@ -80,14 +80,14 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
         config_data['tts_config'] = request.tts
     if request.image_generation is not None:
         config_data['image_gen_config'] = request.image_generation
+    if request.video_generation is not None:
+        config_data['video_gen_config'] = request.video_generation
     if request.vision is not None:
         config_data['vision_config'] = request.vision
     if request.prompt_enhancer is not None:
         config_data['prompt_enhancer_config'] = request.prompt_enhancer
     if request.emotes is not None:
         config_data['emote_config'] = request.emotes
-    if request.proactive_chat is not None:
-        config_data['proactive_chat_config'] = request.proactive_chat
     if request.adapters is not None:
         config_data['adapters'] = request.adapters
     if request.preferences is not None:
@@ -103,6 +103,7 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
         )
     
     # 返回更新后的配置
+    get_bot().invalidate_user_cache(str(user_info['user_id']))
     config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
     try:
         get_bot().invalidate_user_cache(str(user_info['user_id']))
@@ -122,7 +123,7 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
     Args:
         token: 访问令牌
         config_type: 配置类型，可选值: system_prompt, llm, tts, image_generation, vision, 
-                     prompt_enhancer, emotes, proactive_chat, preferences
+                     prompt_enhancer, emotes, preferences
                      如果不指定，则重置所有配置
     """
     if not token:
@@ -141,8 +142,8 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
     if config_type:
         # 重置指定类型的配置
         valid_types = [
-            'system_prompt', 'llm', 'tts', 'image_generation',
-            'vision', 'prompt_enhancer', 'emotes', 'proactive_chat', 'adapters', 'preferences'
+            'system_prompt', 'llm', 'tts', 'image_generation', 'video_generation',
+            'vision', 'prompt_enhancer', 'emotes', 'adapters', 'preferences'
         ]
         
         if config_type not in valid_types:
@@ -159,14 +160,14 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             config_data['tts_config'] = None
         elif config_type == 'image_generation':
             config_data['image_gen_config'] = None
+        elif config_type == 'video_generation':
+            config_data['video_gen_config'] = None
         elif config_type == 'vision':
             config_data['vision_config'] = None
         elif config_type == 'prompt_enhancer':
             config_data['prompt_enhancer_config'] = None
         elif config_type == 'emotes':
             config_data['emote_config'] = None
-        elif config_type == 'proactive_chat':
-            config_data['proactive_chat_config'] = None
         elif config_type == 'adapters':
             config_data['adapters'] = None
         elif config_type == 'preferences':
@@ -178,10 +179,10 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             'llm_config': None,
             'tts_config': None,
             'image_gen_config': None,
+            'video_gen_config': None,
             'vision_config': None,
             'prompt_enhancer_config': None,
             'emote_config': None,
-            'proactive_chat_config': None,
             'adapters': None,
             'preferences': None
         }

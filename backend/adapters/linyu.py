@@ -9,6 +9,7 @@ import re
 import time
 import traceback
 import wave
+from urllib.parse import urlparse
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -20,8 +21,9 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from ..core.bot import Bot
 from ..config import config
 from ..api import proactive as proactive_api
-from ..agent_delegate.parser import extract_delegate_tag
+from ..agent_delegate import extract_delegate_tag
 from ..core.gen_img_parser import extract_gen_img_prompt
+from ..core.gen_video_parser import extract_gen_video_prompt
 from ..core.tts_tag_parser import extract_tts_tag
 from ..utils.text_splitter import smart_split_text
 from ..voice_call import VoiceCallManager, VoiceCallConfig
@@ -558,6 +560,7 @@ class LinyuAdapter:
                 return
 
             last_image = self.bot.get_last_generated_image()
+            last_video = self.bot.get_last_generated_video()
 
             await self._deliver_tts_and_text_response(
                 user_id=user_id,
@@ -568,6 +571,9 @@ class LinyuAdapter:
 
             if last_image and last_image.get("image_data"):
                 asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"]))
+
+            if last_video and last_video.get("video_url"):
+                await self.send_video_message(user_id, last_video["video_url"])
 
             try:
                 await self._maybe_send_emote(text_content, response, user_id)
@@ -653,25 +659,23 @@ class LinyuAdapter:
             user_message_parts.append(f"{instruction_text}\n\n{recognition_text}")
             user_message = "\n\n".join(user_message_parts)
 
-            bot_user_id = self._get_bot_user_id(user_id)
-            session_id = self._get_bot_session_id(user_id)
             proactive_api.record_user_activity("linyu_private", user_id, user_id, user_message)
-            voice_only = self.bot.is_voice_only_mode(bot_user_id)
             llm_response = await self._stream_reply_by_sentence(
                 user_id=user_id,
                 prompt=user_message,
-                bot_user_id=bot_user_id,
-                session_id=session_id,
-                emit_text=not voice_only,
+                session_id=user_id,
             )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, llm_response)
 
-            await self._deliver_tts_and_text_response(
-                user_id=user_id,
-                response=llm_response,
-                voice_only=voice_only,
-                bot_user_id=bot_user_id,
-            )
+            audio_data = None
+            try:
+                audio_data = await self.bot.synthesize_speech(llm_response, user_id=user_id)
+            except Exception as e:
+                print(f"❌ TTS合成失败: {str(e)}")
+
+            if audio_data:
+                tts_text = self.bot.get_last_tts_text(user_id=user_id)
+                await self.send_voice_message(user_id, audio_data, speech_text=tts_text)
 
         except Exception as e:
             print(f"❌ 视觉识别处理失败: {str(e)}")
@@ -752,6 +756,9 @@ class LinyuAdapter:
     async def send_group_message(self, group_id: str, message: str):
         await self._send_text_segments(group_id, message, is_group=True, group_id=group_id)
 
+    async def send_group_video_message(self, group_id: str, video_url: str):
+        await self.send_video_message(group_id, video_url, is_group=True, group_id=group_id)
+
     def _split_ready_sentences(self, buffer: str) -> tuple[list[str], str]:
         """从流式缓冲区中提取完整句子，保留未完成尾部。"""
         if not buffer:
@@ -811,13 +818,13 @@ class LinyuAdapter:
         return text, ""
 
     def _extract_safe_stream_text(self, pending: str) -> tuple[str, str]:
-        """从待处理文本中剥离完整/半截 [GEN_IMG: ...] 和 [DELEGATE: ...] 标签，返回(可显示文本, 余留缓冲)。"""
+        """从待处理文本中剥离完整/半截功能标签，返回(可显示文本, 余留缓冲)。"""
         if not pending:
             return "", ""
 
         lower = pending.lower()
         # 需要过滤的标签前缀列表
-        filter_tokens = ["[gen_img:", "[delegate:", "[tts]", "[/tts]"]
+        filter_tokens = ["[gen_img:", "[gen_video:", "[delegate:"]
         cursor = 0
         visible_parts: list[str] = []
 
@@ -936,6 +943,7 @@ class LinyuAdapter:
 
         cleaned_response, _ = extract_tts_tag(final_response)
         cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
+        cleaned_response, _ = extract_gen_video_prompt(cleaned_response)
         cleaned_response, _ = extract_delegate_tag(cleaned_response)
 
         if sender_error:
@@ -964,6 +972,7 @@ class LinyuAdapter:
 
         cleaned_response, _ = extract_tts_tag(final_response)
         cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
+        cleaned_response, _ = extract_gen_video_prompt(cleaned_response)
         cleaned_response, _ = extract_delegate_tag(cleaned_response)
         return cleaned_response
 
@@ -1074,19 +1083,45 @@ class LinyuAdapter:
             await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
             return
 
-        try:
-            segments = smart_split_text(
-                text=message,
-                max_length=self.max_segment_length,
-                min_length=self.min_segment_length,
-                strategy=self.split_strategy
-            )
-        except Exception:
-            segments = [message]
+        segments = []
+        if self.split_strategy == "sentence":
+            sentences = re.split(r'[。！？.!?]+', message.strip())
+            sentences = [s.strip() for s in sentences if s.strip()]
 
-        if len(segments) == 1 and segments[0] == message:
-            await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
-            return
+            merged_sentences = []
+            i = 0
+            while i < len(sentences):
+                current = sentences[i]
+                if len(current) < self.min_segment_length and i < len(sentences) - 1:
+                    next_sentence = sentences[i + 1]
+                    combined = current + "，" + next_sentence
+                    if len(combined) <= self.max_segment_length:
+                        merged_sentences.append(combined)
+                        i += 2
+                    else:
+                        if merged_sentences and len(merged_sentences[-1]) + len(current) + 1 <= self.max_segment_length:
+                            merged_sentences[-1] = merged_sentences[-1] + "，" + current
+                        else:
+                            merged_sentences.append(current)
+                        i += 1
+                else:
+                    merged_sentences.append(current)
+                    i += 1
+
+            segments = merged_sentences
+            if len(segments) == 1 and len(message) <= self.max_segment_length:
+                await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
+                return
+        else:
+            try:
+                segments = smart_split_text(
+                    text=message,
+                    max_length=self.max_segment_length,
+                    min_length=self.min_segment_length,
+                    strategy=self.split_strategy
+                )
+            except Exception:
+                segments = [message]
 
         if not segments:
             return
@@ -1124,6 +1159,39 @@ class LinyuAdapter:
             await self._upload_media("/v1/api/message/send/Img", msg_id, image_data)
         else:
             print("❌ 创建图片消息失败：未获取到 msgId")
+
+    async def send_video_message(self, user_id: str, video_url: str, is_group: bool = False, group_id: Optional[str] = None):
+        if not video_url:
+            return
+
+        video_data = await self._download_video_bytes(video_url)
+        if not video_data:
+            print(f"❌ 视频下载失败，退回文本: {video_url}")
+            if is_group:
+                await self.send_group_message(group_id or user_id, f"视频已生成：{video_url}")
+            else:
+                await self.send_private_message(user_id, f"视频已生成：{video_url}")
+            return
+
+        ext = self._detect_video_extension(video_url, video_data)
+        filename = f"video.{ext}"
+        print(
+            f"🎬 准备发送视频，大小: {len(video_data)} bytes，格式: {ext} -> 用户 {user_id}"
+        )
+        msg_id = await self._create_media_message(
+            user_id,
+            video_data,
+            content_type="video",
+            filename=filename,
+        )
+        if msg_id:
+            await self._upload_media("/v1/api/message/send/file", msg_id, video_data)
+        else:
+            print("❌ 创建视频消息失败：未获取到 msgId")
+            if is_group:
+                await self.send_group_message(group_id or user_id, f"视频已生成：{video_url}")
+            else:
+                await self.send_private_message(user_id, f"视频已生成：{video_url}")
 
     async def send_voice_message(self, user_id: str, audio_data: bytes, speech_text: Optional[str] = None):
         if not audio_data:
@@ -1176,6 +1244,42 @@ class LinyuAdapter:
         if isinstance(data_obj, dict):
             return str(data_obj.get("id") or "")
         return None
+
+    async def _download_video_bytes(self, video_url: str) -> Optional[bytes]:
+        if not video_url:
+            return None
+        if not self.http_session:
+            await self._ensure_http_session()
+
+        headers = self._auth_headers()
+        try:
+            async with self.http_session.get(video_url, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    preview = str(text or "")[:160].replace("\n", " ")
+                    self._media_debug_log(
+                        f"⚠️ 视频下载失败: status={resp.status}, url={video_url[:180]}, body={preview}"
+                    )
+                    return None
+                raw = await resp.read()
+                if raw:
+                    return raw
+        except Exception as e:
+            self._media_debug_log(f"⚠️ 下载视频异常: {type(e).__name__}: {str(e)}")
+        return None
+
+    @staticmethod
+    def _detect_video_extension(video_url: str, data: bytes) -> str:
+        path = urlparse(video_url).path.lower()
+        if path.endswith(".mp4") or data[:4] == b"\x00\x00\x00\x18":
+            return "mp4"
+        if path.endswith(".mov"):
+            return "mov"
+        if path.endswith(".mkv"):
+            return "mkv"
+        if path.endswith(".webm"):
+            return "webm"
+        return "mp4"
 
     @staticmethod
     def _detect_audio_extension(data: bytes) -> str:

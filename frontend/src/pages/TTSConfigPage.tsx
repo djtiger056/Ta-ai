@@ -15,9 +15,10 @@ import {
   Row,
   Col,
   Typography,
-  Upload
+  Upload,
+  Tooltip
 } from 'antd'
-import { ExperimentOutlined, PlayCircleOutlined, SaveOutlined } from '@ant-design/icons'
+import { ExperimentOutlined, PlayCircleOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons'
 import { ASRConfig, TTSConfig, VoiceCharacter } from '@/types'
 import { asrApi, ttsApi } from '@/services/api'
 import { ttsConfigProxy, asrConfigProxy } from '@/services/configProxy'
@@ -50,6 +51,7 @@ const TTSConfigPage: React.FC = () => {
   const [ttsSaving, setTtsSaving] = useState(false)
   const [ttsTesting, setTtsTesting] = useState(false)
   const [synthesizing, setSynthesizing] = useState(false)
+  const [voicesLoading, setVoicesLoading] = useState(false)
 
   const [asrLoading, setAsrLoading] = useState(false)
   const [asrSaving, setAsrSaving] = useState(false)
@@ -93,7 +95,6 @@ const TTSConfigPage: React.FC = () => {
 
   useEffect(() => {
     loadTTSConfig()
-    loadVoices()
     loadASRConfig()
   }, [])
 
@@ -110,6 +111,7 @@ const TTSConfigPage: React.FC = () => {
       setTtsLoading(true)
       const config = await ttsConfigProxy.getConfig()
       ttsForm.setFieldsValue(config)
+      await loadVoices(config)
     } catch (error) {
       message.error('加载 TTS 配置失败')
     } finally {
@@ -144,12 +146,26 @@ const TTSConfigPage: React.FC = () => {
     }
   }
 
-  const loadVoices = async () => {
+  const loadVoices = async (configOverride?: Partial<TTSConfig>, showSuccess = false) => {
     try {
-      const voiceList = await ttsApi.getVoices()
+      setVoicesLoading(true)
+      const config = configOverride || ttsForm.getFieldsValue()
+      const provider = config?.provider || ttsForm.getFieldValue('provider')
+      const qihangConfig = (config?.qihang || {}) as any
+
+      const voiceList = provider === 'qihang'
+        ? await ttsApi.getQihangVoices(qihangConfig)
+        : await ttsApi.getVoices()
+
       setVoices(voiceList)
+      if (showSuccess) {
+        message.success(`已加载 ${voiceList.length} 个语音角色`)
+      }
     } catch (error) {
-      message.error('加载语音角色列表失败')
+      const detail = (error as any)?.response?.data?.detail
+      message.error(detail || '加载语音角色列表失败')
+    } finally {
+      setVoicesLoading(false)
     }
   }
 
@@ -181,7 +197,10 @@ const TTSConfigPage: React.FC = () => {
   const handleTestTTSConnection = async () => {
     try {
       setTtsTesting(true)
-      const success = await ttsApi.testTTSConnection()
+      const provider = ttsForm.getFieldValue('provider')
+      const success = provider === 'qihang'
+        ? (await ttsApi.getQihangVoices(ttsForm.getFieldValue('qihang') || {})).length > 0
+        : await ttsApi.testTTSConnection()
       if (success) {
         message.success('TTS 连接测试成功')
       } else {
@@ -194,13 +213,23 @@ const TTSConfigPage: React.FC = () => {
     }
   }
 
+  const handleRefreshVoices = async () => {
+    await loadVoices(undefined, true)
+  }
+
   const handleSynthesize = async () => {
     try {
       setSynthesizing(true)
       const testText = '你好，这是一个语音合成测试。'
       const provider = ttsForm.getFieldValue('provider')
       const voice = provider === 'qihang' ? ttsForm.getFieldValue(['qihang', 'voice']) : undefined
-      const audioBlob = await ttsApi.synthesize(testText, voice)
+      const audioBlob = await ttsApi.synthesize(
+        testText,
+        voice,
+        provider === 'qihang'
+          ? { provider: 'qihang', qihang: ttsForm.getFieldValue('qihang') || {} }
+          : undefined
+      )
 
       if (audioUrl) {
         URL.revokeObjectURL(audioUrl)
@@ -209,8 +238,9 @@ const TTSConfigPage: React.FC = () => {
       setAudioUrl(url)
 
       message.success('语音合成成功')
-    } catch (error) {
-      message.error('语音合成失败')
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail
+      message.error(detail ? `语音合成失败：${detail}` : '语音合成失败')
     } finally {
       setSynthesizing(false)
     }
@@ -513,8 +543,25 @@ const TTSConfigPage: React.FC = () => {
                         <Select
                           showSearch
                           allowClear
+                          loading={voicesLoading}
                           placeholder="选择或输入语音角色"
                           optionFilterProp="children"
+                          dropdownRender={(menu) => (
+                            <>
+                              <div style={{ padding: 8 }}>
+                                <Button
+                                  block
+                                  size="small"
+                                  icon={<ReloadOutlined />}
+                                  loading={voicesLoading}
+                                  onClick={handleRefreshVoices}
+                                >
+                                  检测并刷新语音角色
+                                </Button>
+                              </div>
+                              {menu}
+                            </>
+                          )}
                           onSearch={(value) => setCustomVoiceInput(value)}
                           onBlur={() => setCustomVoiceInput('')}
                           filterOption={(input, option) => {
@@ -532,6 +579,16 @@ const TTSConfigPage: React.FC = () => {
                           ))}
                         </Select>
                       </Form.Item>
+                      <Tooltip title="使用当前 API 地址和密钥检测启航 AI 可用语音角色">
+                        <Button
+                          icon={<ReloadOutlined />}
+                          loading={voicesLoading}
+                          onClick={handleRefreshVoices}
+                          style={{ marginTop: -12 }}
+                        >
+                          检测角色
+                        </Button>
+                      </Tooltip>
                     </Col>
                   </Row>
                 </>

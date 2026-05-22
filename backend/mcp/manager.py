@@ -69,7 +69,7 @@ class ClockPlugin(MCPPlugin):
             tz_preference = tz_preference or config.get("clock", {}).get("timezone")
             if not tz_preference:
                 # Fall back to proactive chat timezone if clock-specific setting is missing
-                tz_preference = config.get("proactive_chat", {}).get("timezone")
+                tz_preference = config.proactive_chat_config.get("timezone")
         except Exception:
             # 配置不可用时忽略，使用环境或系统默认
             pass

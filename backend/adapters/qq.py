@@ -314,6 +314,7 @@ class QQAdapter:
             if last_image and last_image.get("image_data"):
                 image_data = last_image["image_data"]
                 print(f"[QQ Adapter] 检测到Bot主动生成图片，大小: {len(image_data)} bytes")
+            last_video = self.bot.get_last_generated_video()
 
             voice_only = self.bot.is_voice_only_mode(user_id)
 
@@ -331,6 +332,9 @@ class QQAdapter:
 
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"], is_group=False))
+
+                if last_video and last_video.get("video_url"):
+                    await self.send_video_message(user_id, last_video["video_url"])
             else:
                 audio_data = await self._resolve_tts_audio(response, user_id)
 
@@ -344,6 +348,9 @@ class QQAdapter:
 
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"], is_group=False))
+
+                if last_video and last_video.get("video_url"):
+                    await self.send_video_message(user_id, last_video["video_url"])
 
             try:
                 await self._maybe_send_emote(text_content, response, user_id, is_group=False)
@@ -469,6 +476,7 @@ class QQAdapter:
             if last_image and last_image.get("image_data"):
                 image_data = last_image["image_data"]
                 print(f"[QQ Adapter] 检测到Bot主动生成图片（群聊），大小: {len(image_data)} bytes")
+            last_video = self.bot.get_last_generated_video()
 
             voice_only = self.bot.is_voice_only_mode(user_id)
 
@@ -489,6 +497,8 @@ class QQAdapter:
 
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(group_id, last_image["image_data"], is_group=True, group_id=group_id))
+                if last_video and last_video.get("video_url"):
+                    await self.send_video_message(group_id, last_video["video_url"], is_group=True, group_id=group_id)
             else:
                 audio_data = await self._resolve_tts_audio(response, user_id)
 
@@ -502,6 +512,8 @@ class QQAdapter:
 
                 if last_image and last_image.get("image_data"):
                     asyncio.create_task(self._send_image_with_delay(group_id, last_image["image_data"], is_group=True, group_id=group_id))
+                if last_video and last_video.get("video_url"):
+                    await self.send_video_message(group_id, last_video["video_url"], is_group=True, group_id=group_id)
 
             try:
                 await self._maybe_send_emote(text_content, response, group_id, is_group=True, group_id=group_id)
@@ -863,6 +875,43 @@ class QQAdapter:
         根据segment_config配置决定是否分段发送消息
         """
         await self._send_segmented(group_id, message, is_group=True, group_id=group_id)
+
+    async def send_video_message(self, target_id: str, video_url: str, is_group: bool = False, group_id: Optional[str] = None):
+        """发送视频消息。"""
+        if not self.websocket:
+            return
+        if not video_url:
+            return
+
+        message = f"[CQ:video,file={video_url}]"
+
+        if is_group and group_id:
+            data = {
+                "action": "send_group_msg",
+                "params": {
+                    "group_id": int(group_id),
+                    "message": message,
+                },
+            }
+        else:
+            data = {
+                "action": "send_private_msg",
+                "params": {
+                    "user_id": int(target_id),
+                    "message": message,
+                },
+            }
+
+        try:
+            await self.websocket.send(json.dumps(data))
+            print(f"🎬 视频消息发送成功 {'群组' if is_group else '私聊'} {target_id}: {video_url}")
+        except Exception as e:
+            print(f"❌ 视频消息发送失败: {type(e).__name__}: {str(e)}")
+            fallback_text = f"视频已生成：{video_url}"
+            if is_group:
+                await self.send_group_message(group_id or target_id, fallback_text)
+            else:
+                await self.send_private_message(target_id, fallback_text)
     
     async def _handle_notice(self, data: Dict[str, Any]):
         """处理通知消息"""

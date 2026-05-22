@@ -15,6 +15,7 @@ from ..config import config
 from ..providers import get_provider
 from ..tts.manager import TTSManager
 from ..image_gen import ImageGenerationManager, ImageGenerationConfig
+from ..video_gen import VideoGenerationManager, VideoGenerationConfig
 from ..user import user_manager
 from ..utils.config_merger import config_merger
 from ..utils.datetime_utils import get_now
@@ -58,6 +59,10 @@ class UserResourceCache:
         # 用户级别的 ImageGen Manager 实例缓存
         self._user_image_gen_managers: Dict[str, ImageGenerationManager] = {}
         self._user_image_gen_signatures: Dict[str, str] = {}
+
+        # 用户级别的 VideoGen Manager 实例缓存
+        self._user_video_gen_managers: Dict[str, VideoGenerationManager] = {}
+        self._user_video_gen_signatures: Dict[str, str] = {}
 
     async def get_user_config(self, user_id: str) -> Dict[str, Any]:
         """获取用户配置（带缓存）。
@@ -134,6 +139,7 @@ class UserResourceCache:
             'llm': config.llm_config,
             'tts': config.tts_config,
             'image_generation': config.image_gen_config.dict() if hasattr(config.image_gen_config, 'dict') else {},
+            'video_generation': config.video_gen_config.dict() if hasattr(config.video_gen_config, 'dict') else {},
             'vision': config.vision_config.dict() if hasattr(config.vision_config, 'dict') else {},
             'emotes': config.emote_config.dict() if hasattr(config.emote_config, 'dict') else {},
             'prompt_enhancer': config.prompt_enhancer_config.dict() if hasattr(config.prompt_enhancer_config, 'dict') else {},
@@ -212,6 +218,44 @@ class UserResourceCache:
         self._user_image_gen_managers[user_id] = manager
         self._user_image_gen_signatures[user_id] = signature
         return manager
+
+    def get_video_gen_manager(self, user_id: str) -> Optional[VideoGenerationManager]:
+        """获取该用户的 VideoGenerationManager（按用户配置缓存）。"""
+        merged = self.get_merged_config(user_id)
+        video_cfg = merged.get("video_generation", {}) or {}
+        signature = json.dumps(video_cfg, sort_keys=True, ensure_ascii=False)
+
+        cached = self._user_video_gen_managers.get(user_id)
+        if cached is not None and self._user_video_gen_signatures.get(user_id) == signature:
+            return cached
+
+        try:
+            manager = VideoGenerationManager(VideoGenerationConfig(**video_cfg))
+        except Exception as e:
+            logger.warning(f"用户视频生成配置无效，禁用视频生成 user_id={user_id}: {e}")
+            return None
+
+        self._user_video_gen_managers[user_id] = manager
+        self._user_video_gen_signatures[user_id] = signature
+        return manager
+
+    def invalidate_user(self, user_id: str) -> None:
+        """清除指定用户的配置和派生资源缓存。"""
+        self._user_configs.pop(user_id, None)
+        self._user_config_cache_time.pop(user_id, None)
+        self._user_id_to_username.pop(user_id, None)
+
+        self._user_providers.pop(user_id, None)
+        self._user_provider_signatures.pop(user_id, None)
+
+        self._user_tts_managers.pop(user_id, None)
+        self._user_tts_signatures.pop(user_id, None)
+
+        self._user_image_gen_managers.pop(user_id, None)
+        self._user_image_gen_signatures.pop(user_id, None)
+
+        self._user_video_gen_managers.pop(user_id, None)
+        self._user_video_gen_signatures.pop(user_id, None)
 
     def get_system_prompt(self, user_id: str) -> str:
         """获取用户的系统提示词（人设层）。

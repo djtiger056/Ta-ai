@@ -18,6 +18,8 @@ class ConfigRequest(BaseModel):
     adapters: Optional[Dict[str, Any]] = Field(None, description="适配器配置")
     system_prompt: Optional[str] = Field(None, description="系统提示词")
     daily_schedule_generation: Optional[Dict[str, Any]] = Field(None, description="每日作息生成配置")
+    image_generation: Optional[Dict[str, Any]] = Field(None, description="图像生成配置")
+    video_generation: Optional[Dict[str, Any]] = Field(None, description="视频生成配置")
 
 @router.get("/config")
 async def get_config():

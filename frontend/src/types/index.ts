@@ -26,6 +26,7 @@ export interface SystemConfig {
   system_prompt: string
   tts?: TTSConfig
   asr?: ASRConfig
+  video_generation?: Record<string, any>
 }
 
 export interface TTSConfig {
@@ -297,4 +298,3 @@ export interface DailyScheduleGenConfig {
     max_tokens?: number
   } | null
 }
-

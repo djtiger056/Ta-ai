@@ -14,6 +14,7 @@ import yaml
 from pathlib import Path
 import logging
 from ..tts.manager import TTSManager
+from ..tts.providers.qihang import QihangTTSProvider
 from ..config import config as app_config
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,17 @@ class TTSSynthesisRequest(BaseModel):
     """TTS合成请求"""
     text: str = Field(..., description="要合成的文本")
     voice: Optional[str] = Field(None, description="语音角色")
+    provider: Optional[str] = Field(None, description="临时指定TTS提供商")
+    qihang: Optional[Dict[str, Any]] = Field(None, description="临时启航AI配置")
+
+
+class QihangVoicesRequest(BaseModel):
+    """启航AI语音角色检测请求"""
+    api_base: Optional[str] = Field(None, description="API地址")
+    base_url: Optional[str] = Field(None, description="兼容旧配置字段：API地址")
+    api_key: str = Field("", description="API密钥")
+    model: Optional[str] = Field(None, description="模型名称")
+    voice: Optional[str] = Field(None, description="默认语音角色")
 
 
 class TTSResponse(BaseModel):
@@ -141,19 +153,51 @@ async def get_tts_voices():
         raise HTTPException(status_code=500, detail=f"获取语音角色列表失败: {str(e)}")
 
 
+@router.post("/tts/qihang/voices")
+async def get_qihang_voices(request: QihangVoicesRequest):
+    """按前端当前表单参数检测并获取启航AI语音角色列表"""
+    try:
+        cfg = request.dict(exclude_unset=True)
+        api_base = cfg.get("api_base") or cfg.get("base_url")
+        if api_base:
+            cfg["api_base"] = api_base
+        if not (cfg.get("api_key") or "").strip():
+            raise HTTPException(status_code=400, detail="启航AI API 密钥未配置")
+
+        provider = QihangTTSProvider(cfg)
+        voices = await provider.get_voices(allow_fallback=False)
+        return {"success": True, "data": voices}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"检测启航AI语音角色失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"检测启航AI语音角色失败: {str(e)}")
+
+
 @router.post("/tts/synthesize")
 async def synthesize_speech(request: TTSSynthesisRequest):
     """合成语音"""
     try:
-        manager = get_tts_manager()
-        
-        # 检查TTS是否启用
-        if not manager.config.enabled:
-            raise HTTPException(status_code=400, detail="TTS功能未启用")
-        
-        # 合成语音
-        audio_data = await manager.synthesize(request.text, request.voice)
-        
+        if request.provider == "qihang" and request.qihang is not None:
+            qihang_cfg = dict(request.qihang)
+            api_base = qihang_cfg.get("api_base") or qihang_cfg.get("base_url")
+            if api_base:
+                qihang_cfg["api_base"] = api_base
+            if request.voice:
+                qihang_cfg["voice"] = request.voice
+            if not (qihang_cfg.get("api_key") or "").strip():
+                raise HTTPException(status_code=400, detail="启航AI API 密钥未配置")
+            audio_data = await QihangTTSProvider(qihang_cfg).synthesize(request.text, request.voice)
+        else:
+            manager = get_tts_manager()
+
+            # 检查TTS是否启用
+            if not manager.config.enabled:
+                raise HTTPException(status_code=400, detail="TTS功能未启用")
+
+            # 合成语音
+            audio_data = await manager.synthesize(request.text, request.voice)
+
         if not audio_data:
             raise HTTPException(status_code=400, detail="语音合成失败，可能文本为空或包含不支持的内容")
 

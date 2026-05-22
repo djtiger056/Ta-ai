@@ -70,10 +70,31 @@ def _require_scheduler() -> ProactiveChatScheduler:
     raise HTTPException(status_code=503, detail="主动聊天调度器未运行，请启用配置并重启后端适配器。")
 
 
+def _get_cerebellum_proactive_config() -> Dict[str, Any]:
+    cerebellum_cfg = config.get("cerebellum", {}) or {}
+    if isinstance(cerebellum_cfg, dict):
+        proactive_cfg = cerebellum_cfg.get("proactive_chat")
+        if isinstance(proactive_cfg, dict):
+            return proactive_cfg
+    return config.proactive_chat_config or {}
+
+
+def _update_cerebellum_proactive_config(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cerebellum_cfg = config.get("cerebellum", {}) or {}
+    if not isinstance(cerebellum_cfg, dict):
+        cerebellum_cfg = {}
+    from ..utils.config_merger import config_merger
+
+    proactive_cfg = config_merger.deep_merge(_get_cerebellum_proactive_config(), payload)
+    cerebellum_cfg["proactive_chat"] = proactive_cfg
+    config.update_config("cerebellum", cerebellum_cfg)
+    return proactive_cfg
+
+
 @router.get("/proactive/config")
 async def get_proactive_config():
     try:
-        return {"config": config.proactive_chat_config}
+        return {"config": _get_cerebellum_proactive_config()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取配置失败: {e}")
 
@@ -82,7 +103,7 @@ async def get_proactive_config():
 async def update_proactive_config(cfg: ProactiveConfigRequest):
     try:
         payload = {k: v for k, v in cfg.dict(exclude_none=True).items()}
-        config.update_config("proactive_chat", payload)
+        _update_cerebellum_proactive_config(payload)
 
         scheduler = scheduler_instance
         if scheduler:
@@ -91,7 +112,7 @@ async def update_proactive_config(cfg: ProactiveConfigRequest):
                 future.result(timeout=3)
             except Exception as e:
                 print(f"[Proactive] 调度器热更新失败: {e}")
-        return {"message": "配置已更新", "config": config.proactive_chat_config}
+        return {"message": "配置已更新", "config": _get_cerebellum_proactive_config()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"更新配置失败: {e}")
 
@@ -100,7 +121,7 @@ async def update_proactive_config(cfg: ProactiveConfigRequest):
 async def proactive_status():
     scheduler = scheduler_instance
     if not scheduler:
-        proactive_cfg = config.proactive_chat_config or {}
+        proactive_cfg = _get_cerebellum_proactive_config()
         return {
             "running": False,
             "enabled": bool(proactive_cfg.get("enabled", False)),
