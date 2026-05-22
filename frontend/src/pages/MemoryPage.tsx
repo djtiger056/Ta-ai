@@ -99,6 +99,13 @@ interface MemorySummary {
   created_at?: string
 }
 
+interface MemoryUserInfo {
+  user_id: string
+  display_name: string
+  selector_key?: string
+  channel?: string
+}
+
 const EMBEDDING_HISTORY_STORAGE_KEY = 'lfbot.memory.embedding.history.v1'
 const EMBEDDING_HISTORY_FIELDS = [
   'embedding_model',
@@ -165,8 +172,7 @@ const MemoryPage: React.FC = () => {
   const [longTermMemories, setLongTermMemories] = useState<MemoryItem[]>([])
   const [searchResults, setSearchResults] = useState<MemoryItem[]>([])
   const [searchLoading, setSearchLoading] = useState(false)
-  const [userIds, setUserIds] = useState<string[]>([])
-  const [userInfoMap, setUserInfoMap] = useState<Record<string, string>>({})
+  const [memoryUserOptions, setMemoryUserOptions] = useState<MemoryUserInfo[]>([])
   const [selectedUserId, setSelectedUserId] = useState<string>('')
   const [externalProfiles, setExternalProfiles] = useState<any[]>([])
   const [externalEvents, setExternalEvents] = useState<any[]>([])
@@ -205,28 +211,23 @@ const MemoryPage: React.FC = () => {
   }, [])
 
 
-  useEffect(() => {
-    // 加载用户ID列表
-    const loadUserIds = async () => {
-      try {
-        const data = await memoryApi.getMemoryUsers()
-        setUserIds(data.user_ids || [])
-        // 构建 user_id -> display_name 映射
-        if (data.user_info && Array.isArray(data.user_info)) {
-          const map: Record<string, string> = {}
-          for (const info of data.user_info) {
-            map[info.user_id] = info.display_name || info.user_id
-          }
-          setUserInfoMap(map)
-        }
-        if (data.user_ids && data.user_ids.length > 0) {
-          setSelectedUserId(data.user_ids[0])
-        }
-      } catch (error) {
-        console.error('加载用户ID列表失败:', error)
-      }
+  const loadMemoryUsers = async () => {
+    try {
+      const data = await memoryApi.getMemoryUsers()
+      const ids = data.user_ids || []
+      const infoList = Array.isArray(data.user_info) ? data.user_info : []
+      setMemoryUserOptions(infoList)
+      setSelectedUserId((prev) => {
+        if (prev && ids.includes(prev)) return prev
+        return ids[0] || ''
+      })
+    } catch (error) {
+      console.error('加载记忆身份列表失败:', error)
     }
-    loadUserIds()
+  }
+
+  useEffect(() => {
+    loadMemoryUsers()
   }, [])
 
   useEffect(() => {
@@ -454,7 +455,7 @@ const MemoryPage: React.FC = () => {
   // 短期记忆标签页
   const loadShortTermMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -469,7 +470,7 @@ const MemoryPage: React.FC = () => {
   // 待处理区标签页
   const loadPendingMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -483,7 +484,7 @@ const MemoryPage: React.FC = () => {
 
   const handleSummarizePending = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -530,7 +531,7 @@ const MemoryPage: React.FC = () => {
   // 中期记忆标签页
   const loadMidTermMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -545,7 +546,7 @@ const MemoryPage: React.FC = () => {
   // 长期记忆标签页
   const loadLongTermMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -573,7 +574,7 @@ const MemoryPage: React.FC = () => {
 
   const loadExternalProfiles = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -590,7 +591,7 @@ const MemoryPage: React.FC = () => {
 
   const loadExternalEvents = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -611,7 +612,7 @@ const MemoryPage: React.FC = () => {
 
   const loadExternalContext = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -636,7 +637,7 @@ const MemoryPage: React.FC = () => {
 
   const handleSearchMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -662,7 +663,7 @@ const MemoryPage: React.FC = () => {
 
   const handleAddMemory = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     if (config?.long_term_strategy === 'external') {
@@ -707,7 +708,7 @@ const MemoryPage: React.FC = () => {
 
   const handleClearMemories = async () => {
     if (!selectedUserId) {
-      message.warning('请选择用户ID')
+      message.warning('请选择记忆身份')
       return
     }
     if (config?.long_term_strategy === 'external') {
@@ -993,13 +994,13 @@ const MemoryPage: React.FC = () => {
       <h1>记忆系统管理</h1>
       <div style={{ marginBottom: 16 }}>
         <Space>
-          <span>选择用户ID:</span>
+          <span>选择记忆身份:</span>
           <Select
             style={{ width: 420 }}
             value={selectedUserId}
             onChange={setSelectedUserId}
-            options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
-            placeholder="选择用户"
+            options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+            placeholder="选择记忆身份"
             showSearch
             filterOption={(input, option) =>
               (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
@@ -1007,30 +1008,9 @@ const MemoryPage: React.FC = () => {
           />
           <Button 
             icon={<ReloadOutlined />} 
-            onClick={() => {
-              // 重新加载用户ID列表
-              const loadUserIds = async () => {
-                try {
-                  const data = await memoryApi.getMemoryUsers()
-                  setUserIds(data.user_ids || [])
-                  if (data.user_info && Array.isArray(data.user_info)) {
-                    const map: Record<string, string> = {}
-                    for (const info of data.user_info) {
-                      map[info.user_id] = info.display_name || info.user_id
-                    }
-                    setUserInfoMap(map)
-                  }
-                  if (data.user_ids && data.user_ids.length > 0) {
-                    setSelectedUserId((prev) => (prev && data.user_ids.includes(prev) ? prev : data.user_ids[0]))
-                  }
-                } catch (error) {
-                  console.error('加载用户ID列表失败:', error)
-                }
-              }
-              loadUserIds()
-            }}
+            onClick={loadMemoryUsers}
           >
-            刷新用户列表
+            刷新记忆身份
           </Button>
         </Space>
       </div>
@@ -1698,10 +1678,10 @@ const MemoryPage: React.FC = () => {
             <Col span={8}>
               <Card title="搜索记忆">
                 <Form form={searchForm} layout="vertical">
-                  <Form.Item label="选择用户" name="user_id" initialValue={selectedUserId}>
+                  <Form.Item label="记忆身份" name="user_id" initialValue={selectedUserId}>
                     <Select
-                      options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
-                      placeholder="选择用户"
+                      options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+                      placeholder="选择记忆身份"
                       showSearch
                       filterOption={(input, option) =>
                         (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
@@ -1752,10 +1732,10 @@ const MemoryPage: React.FC = () => {
               
               <Card title="添加长期记忆" style={{ marginTop: 16 }}>
                 <Form form={addMemoryForm} layout="vertical">
-                  <Form.Item label="选择用户" name="user_id" initialValue={selectedUserId}>
+                  <Form.Item label="记忆身份" name="user_id" initialValue={selectedUserId}>
                     <Select
-                      options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
-                      placeholder="选择用户"
+                      options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+                      placeholder="选择记忆身份"
                       showSearch
                       filterOption={(input, option) =>
                         (option?.label as string || '').toLowerCase().includes(input.toLowerCase())

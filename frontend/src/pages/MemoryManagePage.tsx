@@ -3,7 +3,6 @@ import {
   Card, 
   Form, 
   Input, 
-  InputNumber, 
   Button, 
   message, 
   Table, 
@@ -17,7 +16,6 @@ import {
 import { 
   EditOutlined, 
   DeleteOutlined,
-  PlusOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
 import { memoryApi } from '@/services/api'
@@ -33,6 +31,11 @@ interface MemoryItem {
   updated_at?: string
 }
 
+interface MemoryUserInfo {
+  user_id: string
+  display_name: string
+}
+
 const MemoryManagePage: React.FC = () => {
   const [form] = Form.useForm()
   const [memories, setMemories] = useState<MemoryItem[]>([])
@@ -40,35 +43,29 @@ const MemoryManagePage: React.FC = () => {
   const [editModalVisible, setEditModalVisible] = useState(false)
   const [editingMemory, setEditingMemory] = useState<MemoryItem | null>(null)
   const [userId, setUserId] = useState<string>('')
-  const [userIds, setUserIds] = useState<string[]>([])
-  const [userInfoMap, setUserInfoMap] = useState<Record<string, string>>({})
+  const [memoryUserOptions, setMemoryUserOptions] = useState<MemoryUserInfo[]>([])
+
+  const loadMemoryUsers = async () => {
+    try {
+      const data = await memoryApi.getMemoryUsers()
+      const infoList = Array.isArray(data.user_info) ? data.user_info : []
+      setMemoryUserOptions(infoList)
+      setUserId((prev) => {
+        if (prev && infoList.some((info) => info.user_id === prev)) return prev
+        return infoList[0]?.user_id || ''
+      })
+    } catch (error) {
+      console.error('加载记忆身份列表失败:', error)
+    }
+  }
 
   useEffect(() => {
-    const loadUserIds = async () => {
-      try {
-        const data = await memoryApi.getMemoryUsers()
-        const ids = data.user_ids || []
-        setUserIds(ids)
-        if (data.user_info && Array.isArray(data.user_info)) {
-          const map: Record<string, string> = {}
-          for (const info of data.user_info) {
-            map[info.user_id] = info.display_name || info.user_id
-          }
-          setUserInfoMap(map)
-        }
-        if (ids.length > 0) {
-          setUserId((prev) => prev || ids[0])
-        }
-      } catch (error) {
-        console.error('加载用户列表失败:', error)
-      }
-    }
-    loadUserIds()
+    loadMemoryUsers()
   }, [])
 
   const loadMemories = async () => {
     if (!userId) {
-      message.warning('请选择用户')
+      message.warning('请选择记忆身份')
       return
     }
     try {
@@ -196,16 +193,19 @@ const MemoryManagePage: React.FC = () => {
       <Card title="记忆管理">
         <Space style={{ marginBottom: 16 }}>
           <Select
-            placeholder="选择用户"
+            placeholder="选择记忆身份"
             value={userId}
             onChange={setUserId}
             style={{ width: 420 }}
-            options={userIds.map(id => ({ label: userInfoMap[id] || id, value: id }))}
+            options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
             showSearch
             filterOption={(input, option) =>
               (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
             }
           />
+          <Button icon={<ReloadOutlined />} onClick={loadMemoryUsers}>
+            刷新记忆身份
+          </Button>
           <Button type="primary" icon={<ReloadOutlined />} onClick={loadMemories} loading={loading}>
             加载记忆
           </Button>
