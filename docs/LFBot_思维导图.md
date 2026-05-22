@@ -417,8 +417,8 @@ LFBot (AI 聊天陪伴机器人)
 │   │
 │   ├── 访问地址
 │   │   ├── 前端界面: http://localhost:3000
-│   │   ├── 后端 API: http://localhost:8002
-│   │   └── API 文档: http://localhost:8002/docs
+│   │   ├── 后端 API: http://localhost:8003
+│   │   └── API 文档: http://localhost:8003/docs
 │   │
 │   └── 生产部署
 │       ├── 反向代理 (Nginx/Caddy)

@@ -210,8 +210,15 @@ class ContextBuilder:
         如果历史中没有 system 消息，则插入一条新的。
         注意：此方法只操作第一条 system 消息，不影响后续的功能协议 system 消息。
         """
+        content = str(content or "").strip()
+        if not content:
+            return
         if enhanced_history and enhanced_history[0].get("role") == "system":
-            enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + content
+            base_content = str(enhanced_history[0].get("content", "") or "")
+            if base_content:
+                enhanced_history[0]["content"] = base_content + "\n\n" + content
+            else:
+                enhanced_history[0]["content"] = content
         else:
             enhanced_history.insert(0, {
                 "role": "system",

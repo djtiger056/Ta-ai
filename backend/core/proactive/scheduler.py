@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import random
-from collections import defaultdict
 from datetime import datetime, time, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo
@@ -32,8 +31,7 @@ class ProactiveChatScheduler:
         # 发送器可接受文本或携带图片的 payload
         self.senders: Dict[str, Callable[[Dict[str, Any], Union[str, Dict[str, Any]]], Awaitable[None]]] = {}
         self.target_state: Dict[str, ProactiveTargetState] = {}
-        self._config: Dict[str, Any] = config.proactive_chat_config or {}
-        self._warning_state: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        self._config: Dict[str, Any] = self._load_config()
 
     def register_sender(self, channel: str, sender: Callable[[Dict[str, Any], Union[str, Dict[str, Any]]], Awaitable[None]]):
         """注册发送器（例如 QQ 私聊）。sender 接受 target dict 与文本或包含 image 的 payload。"""
@@ -59,62 +57,22 @@ class ProactiveChatScheduler:
         print("[Proactive] 调度器已停止")
 
     async def reload_config(self):
-        self._config = config.proactive_chat_config or {}
+        self._config = self._load_config()
         # 重置每日计数和随机时间
         self.target_state = {}
         print("[Proactive] 配置已重新加载")
 
+    def _load_config(self) -> Dict[str, Any]:
+        cerebellum_cfg = config.get("cerebellum", {}) or {}
+        if isinstance(cerebellum_cfg, dict):
+            proactive_cfg = cerebellum_cfg.get("proactive_chat")
+            if isinstance(proactive_cfg, dict):
+                return proactive_cfg or {}
+        return config.proactive_chat_config or {}
+
     def _now(self) -> datetime:
         tz = self._get_timezone()
         return datetime.now(tz) if tz else datetime.now()
-
-    def _log_limited_warning(
-        self,
-        category: str,
-        key: str,
-        message: str,
-        *,
-        now: Optional[datetime] = None,
-        initial_burst: int = 3,
-        cooldown: timedelta = timedelta(minutes=30),
-    ) -> None:
-        """
-        限制重复告警日志的输出频率。
-
-        前几次命中时正常打印，之后在冷却期内抑制重复日志；
-        冷却结束后再次打印，并附带被抑制的次数，避免日志刷屏。
-        """
-        current_time = now or self._now()
-        category_state = self._warning_state.setdefault(category, {})
-        state = category_state.setdefault(
-            key,
-            {
-                "count": 0,
-                "suppressed": 0,
-                "last_logged_at": None,
-            },
-        )
-
-        state["count"] += 1
-        total_count = int(state["count"])
-        last_logged_at = state.get("last_logged_at")
-
-        if total_count <= initial_burst:
-            print(message)
-            state["last_logged_at"] = current_time
-            return
-
-        if not last_logged_at or current_time - last_logged_at >= cooldown:
-            suppressed = int(state.get("suppressed", 0) or 0)
-            if suppressed > 0:
-                print(f"{message}（最近抑制 {suppressed} 次重复告警）")
-                state["suppressed"] = 0
-            else:
-                print(message)
-            state["last_logged_at"] = current_time
-            return
-
-        state["suppressed"] = int(state.get("suppressed", 0) or 0) + 1
 
     def _compose_target_key(self, channel: str, user_id: str, session_id: Optional[str] = None) -> str:
         normalized_session = session_id or user_id
@@ -787,13 +745,7 @@ class ProactiveChatScheduler:
                 # 查找对应的target
                 target = self._find_target_for_user(user_id, session_id)
                 if not target:
-                    warning_key = f"{user_id}:{session_id}"
-                    self._log_limited_warning(
-                        "missing_reminder_target",
-                        warning_key,
-                        f"[Proactive] 未找到用户 {user_id} 的目标配置，跳过待办事项",
-                        now=now,
-                    )
+                    print(f"[Proactive] 未找到用户 {user_id} 的目标配置，跳过待办事项")
                     continue
 
                 # 构建提醒指令

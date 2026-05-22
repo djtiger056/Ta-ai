@@ -150,6 +150,11 @@ class Config:
     @property
     def proactive_chat_config(self) -> Dict[str, Any]:
         """获取主动聊天配置"""
+        cerebellum_cfg = self._config.get('cerebellum', {})
+        if isinstance(cerebellum_cfg, dict):
+            proactive_cfg = cerebellum_cfg.get('proactive_chat')
+            if isinstance(proactive_cfg, dict):
+                return proactive_cfg
         return self._config.get('proactive_chat', {})
 
     @property

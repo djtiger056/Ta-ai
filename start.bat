@@ -33,11 +33,11 @@ if errorlevel 1 (
 echo       OK
 
 REM ===== Check port =====
-echo [2/4] Checking port 8002...
-netstat -ano 2>nul | findstr ":8002.*LISTENING" >nul 2>&1
+echo [2/4] Checking port 8003...
+netstat -ano 2>nul | findstr ":8003.*LISTENING" >nul 2>&1
 if not errorlevel 1 (
-    echo       Port 8002 in use, cleaning...
-    for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8002.*LISTENING"') do (
+    echo       Port 8003 in use, cleaning...
+    for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":8003.*LISTENING"') do (
         taskkill /PID %%a /F >nul 2>&1
     )
     timeout /t 2 /nobreak >nul
@@ -55,7 +55,7 @@ set /a retries=0
 :wait_backend
 timeout /t 2 /nobreak >nul
 set /a retries+=1
-"%VENV_PYTHON%" -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/api/health')" >nul 2>&1
+"%VENV_PYTHON%" -c "import urllib.request; urllib.request.urlopen('http://localhost:8003/api/health')" >nul 2>&1
 if not errorlevel 1 (
     echo       OK - backend ready
     goto backend_ok
@@ -79,9 +79,9 @@ echo ========================================
 echo           All services started!
 echo ========================================
 echo.
-echo   Backend:  http://localhost:8002
+echo   Backend:  http://localhost:8003
 echo   Frontend: http://localhost:3000
-echo   API Docs: http://localhost:8002/docs
+echo   API Docs: http://localhost:8003/docs
 echo.
 echo   Close backend/frontend windows to stop
 echo ========================================

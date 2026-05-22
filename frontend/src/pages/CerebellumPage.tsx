@@ -30,7 +30,6 @@ import {
 import dayjs from 'dayjs'
 
 import { cerebellumApi, proactiveApi } from '@/services/api'
-import { proactiveConfigProxy } from '@/services/configProxy'
 import { CerebellumHistoryItem, CerebellumMotivation, CerebellumState } from '@/types'
 
 const { Title, Text } = Typography
@@ -82,10 +81,22 @@ const CerebellumPage: React.FC = () => {
 
   const loadProactiveConfig = async () => {
     try {
-      const cfg = await proactiveConfigProxy.getConfig()
+      const cfg = engineMeta?.config?.proactive_chat || {}
       form.setFieldsValue({
+        proactive_enabled: cfg?.enabled ?? false,
+        proactive_timezone: cfg?.timezone || 'Asia/Shanghai',
+        proactive_check_interval_seconds: cfg?.check_interval_seconds ?? 60,
         default_prompt: cfg?.default_prompt || '',
         message_templates_text: (cfg?.message_templates || []).join('\n'),
+        targets_text: JSON.stringify(cfg?.targets || [], null, 2),
+        behavior_rules_enabled: cfg?.behavior_rules?.enabled ?? true,
+        global_cooldown_seconds: cfg?.behavior_rules?.global_cooldown_seconds ?? 1800,
+        inactive_greeting_enabled: cfg?.behavior_rules?.inactive_greeting?.enabled ?? true,
+        inactive_after_seconds: cfg?.behavior_rules?.inactive_greeting?.after_seconds ?? 21600,
+        inactive_min_user_messages: cfg?.behavior_rules?.inactive_greeting?.min_user_messages ?? 1,
+        follow_up_enabled: cfg?.behavior_rules?.conversation_follow_up?.enabled ?? true,
+        follow_up_after_seconds: cfg?.behavior_rules?.conversation_follow_up?.after_seconds ?? 900,
+        follow_up_min_user_messages: cfg?.behavior_rules?.conversation_follow_up?.min_user_messages ?? 1,
         image_generation_enabled: cfg?.image_generation?.enabled ?? false,
         image_generation_max_per_day: cfg?.image_generation?.max_per_day ?? 3,
       })
@@ -102,15 +113,49 @@ const CerebellumPage: React.FC = () => {
         .split('\n')
         .map((t: string) => t.trim())
         .filter(Boolean)
+      let targets = []
+      if (values.targets_text) {
+        targets = JSON.parse(values.targets_text)
+        if (!Array.isArray(targets)) {
+          throw new Error('目标列表必须是数组 JSON')
+        }
+      }
       
-      await proactiveConfigProxy.updateConfig({
-        default_prompt: values.default_prompt,
-        message_templates: messageTemplates,
-        image_generation: {
-          enabled: values.image_generation_enabled,
-          max_per_day: values.image_generation_max_per_day,
+      const resp = await cerebellumApi.updateConfig({
+        proactive_chat: {
+          enabled: values.proactive_enabled,
+          timezone: values.proactive_timezone,
+          check_interval_seconds: values.proactive_check_interval_seconds,
+          default_prompt: values.default_prompt,
+          message_templates: messageTemplates,
+          behavior_rules: {
+            enabled: values.behavior_rules_enabled,
+            global_cooldown_seconds: values.global_cooldown_seconds,
+            inactive_greeting: {
+              enabled: values.inactive_greeting_enabled,
+              after_seconds: values.inactive_after_seconds,
+              min_user_messages: values.inactive_min_user_messages,
+            },
+            conversation_follow_up: {
+              enabled: values.follow_up_enabled,
+              after_seconds: values.follow_up_after_seconds,
+              min_user_messages: values.follow_up_min_user_messages,
+            },
+          },
+          image_generation: {
+            enabled: values.image_generation_enabled,
+            max_per_day: values.image_generation_max_per_day,
+          },
+          targets,
         },
       })
+      if (resp?.config) {
+        setEngineMeta((prev) => ({
+          enabled: prev?.enabled ?? false,
+          running: prev?.running ?? false,
+          config: resp.config,
+        }))
+      }
       message.success('配置已保存')
     } catch (err) {
       console.error(err)
@@ -140,8 +185,19 @@ const CerebellumPage: React.FC = () => {
 
   useEffect(() => {
     loadAll()
-    loadProactiveConfig()
   }, [])
+
+  useEffect(() => {
+    if (engineMeta?.config) {
+      loadProactiveConfig()
+    }
+  }, [engineMeta?.config])
+
+  useEffect(() => {
+    if (configVisible && engineMeta?.config) {
+      loadProactiveConfig()
+    }
+  }, [configVisible, engineMeta?.config])
 
   useEffect(() => {
     let ws: WebSocket | null = null
@@ -296,13 +352,7 @@ const CerebellumPage: React.FC = () => {
               }
             }}
           />
-          <Button 
-            icon={<SettingOutlined />} 
-            onClick={() => {
-              setConfigVisible(!configVisible)
-              if (!configVisible) loadProactiveConfig()
-            }}
-          >
+          <Button icon={<SettingOutlined />} onClick={() => setConfigVisible(!configVisible)}>
             {configVisible ? '隐藏配置' : '主动消息配置'}
           </Button>
           <Button icon={<ReloadOutlined />} onClick={loadAll} loading={loading}>
@@ -362,12 +412,42 @@ const CerebellumPage: React.FC = () => {
             form={form}
             layout="vertical"
             initialValues={{
+              proactive_enabled: false,
+              proactive_timezone: 'Asia/Shanghai',
+              proactive_check_interval_seconds: 60,
               default_prompt: '',
               message_templates_text: '',
+              behavior_rules_enabled: true,
+              global_cooldown_seconds: 1800,
+              inactive_greeting_enabled: true,
+              inactive_after_seconds: 21600,
+              inactive_min_user_messages: 1,
+              follow_up_enabled: true,
+              follow_up_after_seconds: 900,
+              follow_up_min_user_messages: 1,
               image_generation_enabled: false,
               image_generation_max_per_day: 3,
+              targets_text: '[]',
             }}
           >
+            <Divider titlePlacement="left">总开关</Divider>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item name="proactive_enabled" label="启用主动消息" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col span={9}>
+                <Form.Item name="proactive_timezone" label="时区">
+                  <Input placeholder="Asia/Shanghai" allowClear />
+                </Form.Item>
+              </Col>
+              <Col span={9}>
+                <Form.Item name="proactive_check_interval_seconds" label="检查间隔(秒)">
+                  <InputNumber min={10} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
             <Row gutter={16}>
               <Col span={12}>
                 <Form.Item 
@@ -394,6 +474,51 @@ const CerebellumPage: React.FC = () => {
                 </Form.Item>
               </Col>
             </Row>
+            <Divider titlePlacement="left">行为规则</Divider>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item name="behavior_rules_enabled" label="启用规则" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="global_cooldown_seconds" label="全局冷却(秒)">
+                  <InputNumber min={0} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="inactive_greeting_enabled" label="不活跃问候" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="inactive_after_seconds" label="不活跃阈值(秒)">
+                  <InputNumber min={60} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
+            <Row gutter={16}>
+              <Col span={6}>
+                <Form.Item name="inactive_min_user_messages" label="最少用户消息">
+                  <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="follow_up_enabled" label="追踪回复" valuePropName="checked">
+                  <Switch />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="follow_up_after_seconds" label="追踪阈值(秒)">
+                  <InputNumber min={30} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col span={6}>
+                <Form.Item name="follow_up_min_user_messages" label="追踪最少消息">
+                  <InputNumber min={1} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            </Row>
             <Row gutter={16}>
               <Col span={6}>
                 <Form.Item 
@@ -415,6 +540,14 @@ const CerebellumPage: React.FC = () => {
                 </Form.Item>
               </Col>
             </Row>
+            <Divider titlePlacement="left">目标配置</Divider>
+            <Form.Item
+              label="目标列表(JSON)"
+              tooltip="兼容旧主动消息目标配置，建议保持原结构。"
+              name="targets_text"
+            >
+              <TextArea rows={6} placeholder='[{"channel":"qq_private","user_id":"123","session_id":"123"}]' />
+            </Form.Item>
           </Form>
         </Card>
       )}

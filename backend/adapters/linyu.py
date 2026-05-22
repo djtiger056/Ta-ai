@@ -20,9 +20,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from ..core.bot import Bot
 from ..config import config
 from ..api import proactive as proactive_api
-from ..agent_delegate.parser import extract_delegate_tag
 from ..core.gen_img_parser import extract_gen_img_prompt
-from ..core.tts_tag_parser import extract_tts_tag
 from ..utils.text_splitter import smart_split_text
 from ..voice_call import VoiceCallManager, VoiceCallConfig
 from .debouncer import MessageDebouncer
@@ -496,9 +494,8 @@ class LinyuAdapter:
 
     async def _handle_text_message(self, user_id: str, text_content: str):
         image_task = None
-        bot_user_id = self._get_bot_user_id(user_id)
 
-        image_prompt = self.bot.should_generate_image(text_content, user_id=bot_user_id)
+        image_prompt = self.bot.should_generate_image(text_content, user_id=user_id)
         if image_prompt:
             print(f"🎨 检测到图像生成请求: {image_prompt}")
             image_task = asyncio.create_task(
@@ -520,28 +517,30 @@ class LinyuAdapter:
     async def _do_text_reply(self, user_id: str, text_content: str):
         """执行文本回复（可能由防抖器合并后调用）"""
         try:
-            bot_user_id = self._get_bot_user_id(user_id)
-            session_id = self._get_bot_session_id(user_id)
             proactive_api.record_user_activity("linyu_private", user_id, user_id, text_content)
-            voice_only = self.bot.is_voice_only_mode(bot_user_id)
             response = await self._stream_reply_by_sentence(
                 user_id=user_id,
                 prompt=text_content,
-                bot_user_id=bot_user_id,
-                session_id=session_id,
-                emit_text=not voice_only,
+                session_id=user_id,
             )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, response)
             log_response = response[:200] + "..." if len(response) > 200 else response
             print(f"🤖 Linyu AI回复 -> {user_id}: {log_response}")
             last_image = self.bot.get_last_generated_image()
 
-            await self._deliver_tts_and_text_response(
-                user_id=user_id,
-                response=response,
-                voice_only=voice_only,
-                bot_user_id=bot_user_id,
-            )
+            audio_data = None
+            try:
+                audio_data = await self.bot.synthesize_speech(response, user_id=user_id)
+            except Exception as e:
+                print(f"❌ TTS合成失败: {str(e)}")
+                audio_data = None
+
+            if audio_data:
+                try:
+                    tts_text = self.bot.get_last_tts_text(user_id=user_id)
+                    await self.send_voice_message(user_id, audio_data, speech_text=tts_text)
+                except Exception as e:
+                    print(f"❌ 语音发送失败: {type(e).__name__}: {str(e)}")
 
             if last_image and last_image.get("image_data"):
                 asyncio.create_task(self._send_image_with_delay(user_id, last_image["image_data"]))
@@ -568,9 +567,7 @@ class LinyuAdapter:
 
     async def _handle_image_generation(self, user_id: str, prompt: str):
         try:
-            bot_user_id = self._get_bot_user_id(user_id)
-            session_id = self._get_bot_session_id(user_id)
-            image_data = await self.bot.generate_image(prompt, user_id=bot_user_id, session_id=session_id)
+            image_data = await self.bot.generate_image(prompt, user_id=user_id, session_id=user_id)
             if image_data:
                 await self.send_image_message(user_id, image_data)
             else:
@@ -626,25 +623,23 @@ class LinyuAdapter:
             user_message_parts.append(f"{instruction_text}\n\n{recognition_text}")
             user_message = "\n\n".join(user_message_parts)
 
-            bot_user_id = self._get_bot_user_id(user_id)
-            session_id = self._get_bot_session_id(user_id)
             proactive_api.record_user_activity("linyu_private", user_id, user_id, user_message)
-            voice_only = self.bot.is_voice_only_mode(bot_user_id)
             llm_response = await self._stream_reply_by_sentence(
                 user_id=user_id,
                 prompt=user_message,
-                bot_user_id=bot_user_id,
-                session_id=session_id,
-                emit_text=not voice_only,
+                session_id=user_id,
             )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, llm_response)
 
-            await self._deliver_tts_and_text_response(
-                user_id=user_id,
-                response=llm_response,
-                voice_only=voice_only,
-                bot_user_id=bot_user_id,
-            )
+            audio_data = None
+            try:
+                audio_data = await self.bot.synthesize_speech(llm_response, user_id=user_id)
+            except Exception as e:
+                print(f"❌ TTS合成失败: {str(e)}")
+
+            if audio_data:
+                tts_text = self.bot.get_last_tts_text(user_id=user_id)
+                await self.send_voice_message(user_id, audio_data, speech_text=tts_text)
 
         except Exception as e:
             print(f"❌ 视觉识别处理失败: {str(e)}")
@@ -688,25 +683,23 @@ class LinyuAdapter:
                 await self.send_private_message(user_id, asr_config.error_message)
                 return
 
-            bot_user_id = self._get_bot_user_id(user_id)
-            session_id = self._get_bot_session_id(user_id)
             proactive_api.record_user_activity("linyu_private", user_id, user_id, transcription_text)
-            voice_only = self.bot.is_voice_only_mode(bot_user_id)
             llm_response = await self._stream_reply_by_sentence(
                 user_id=user_id,
                 prompt=transcription_text,
-                bot_user_id=bot_user_id,
-                session_id=session_id,
-                emit_text=not voice_only,
+                session_id=user_id,
             )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, llm_response)
 
-            await self._deliver_tts_and_text_response(
-                user_id=user_id,
-                response=llm_response,
-                voice_only=voice_only,
-                bot_user_id=bot_user_id,
-            )
+            audio_reply = None
+            try:
+                audio_reply = await self.bot.synthesize_speech(llm_response, user_id=user_id)
+            except Exception as e:
+                print(f"❌ TTS合成失败: {str(e)}")
+
+            if audio_reply:
+                tts_text = self.bot.get_last_tts_text(user_id=user_id)
+                await self.send_voice_message(user_id, audio_reply, speech_text=tts_text)
 
         except Exception as e:
             print(f"❌ 语音识别处理失败: {str(e)}")
@@ -785,7 +778,7 @@ class LinyuAdapter:
 
         lower = pending.lower()
         # 需要过滤的标签前缀列表
-        filter_tokens = ["[gen_img:", "[delegate:", "[tts]", "[/tts]"]
+        filter_tokens = ["[gen_img:", "[delegate:"]
         cursor = 0
         visible_parts: list[str] = []
 
@@ -810,30 +803,11 @@ class LinyuAdapter:
 
             cursor = end + 1
 
-    async def _stream_reply_by_sentence(
-        self,
-        user_id: str,
-        prompt: str,
-        bot_user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
-        emit_text: bool = True,
-    ) -> str:
+    async def _stream_reply_by_sentence(self, user_id: str, prompt: str, session_id: Optional[str] = None) -> str:
         """按句流式发送回复，句末标点含 。！？!?。"""
         # 注册 session -> channel 映射，确保委派结果能推送回来
-        effective_bot_user_id = bot_user_id or self._get_bot_user_id(user_id)
-        effective_session = session_id or self._get_bot_session_id(user_id)
+        effective_session = session_id or user_id
         self.bot.register_session_channel(effective_session, "linyu_private")
-
-        if not emit_text:
-            final_response = ""
-            async for chunk in self.bot.chat_stream(prompt, user_id=effective_bot_user_id, session_id=effective_session):
-                if chunk:
-                    final_response += chunk
-
-            cleaned_response, _ = extract_tts_tag(final_response)
-            cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
-            cleaned_response, _ = extract_delegate_tag(cleaned_response)
-            return cleaned_response
 
         final_response = ""
         sentence_buffer = ""
@@ -868,11 +842,7 @@ class LinyuAdapter:
         sender_task = asyncio.create_task(sentence_sender())
         try:
             try:
-                async for chunk in self.bot.chat_stream(
-                    prompt,
-                    user_id=effective_bot_user_id,
-                    session_id=effective_session,
-                ):
+                async for chunk in self.bot.chat_stream(prompt, user_id=user_id, session_id=session_id):
                     if sender_error:
                         break
                     if not chunk:
@@ -906,9 +876,7 @@ class LinyuAdapter:
             await sentence_queue.put(None)
             await sender_task
 
-        cleaned_response, _ = extract_tts_tag(final_response)
-        cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
-        cleaned_response, _ = extract_delegate_tag(cleaned_response)
+        cleaned_response, _ = extract_gen_img_prompt(final_response)
 
         if sender_error:
             if sent_sentence_count <= 0:
@@ -921,63 +889,6 @@ class LinyuAdapter:
             print("⚠️ 流式生成中断，但已向用户发送部分内容，跳过失败兜底提示")
 
         return cleaned_response
-
-    async def _deliver_tts_and_text_response(
-        self,
-        user_id: str,
-        response: str,
-        voice_only: bool,
-        bot_user_id: Optional[str] = None,
-    ) -> None:
-        """根据语音回复配置，统一处理文本/语音发送与失败回退。"""
-        effective_bot_user_id = bot_user_id or self._get_bot_user_id(user_id)
-        audio_data = await self._resolve_tts_audio(response, effective_bot_user_id)
-        text_to_send = response
-
-        if audio_data:
-            if voice_only:
-                text_to_send = self.bot.strip_tts_text(response, user_id=effective_bot_user_id)
-            try:
-                tts_text = self.bot.get_last_tts_text(user_id=effective_bot_user_id)
-                await self.send_voice_message(user_id, audio_data, speech_text=tts_text)
-            except Exception as e:
-                print(f"❌ 语音发送失败: {type(e).__name__}: {str(e)}")
-                audio_data = None
-                text_to_send = response
-
-        if voice_only and text_to_send:
-            await self.send_private_message(user_id, text_to_send)
-
-    def _get_bot_user_id(self, linyu_user_id: str) -> str:
-        """返回该 Linyu 会话应使用的系统内用户 ID。"""
-        owner_user_id = str(getattr(self, "owner_user_id", "") or "").strip()
-        return owner_user_id or str(linyu_user_id)
-
-    def _get_bot_session_id(self, linyu_user_id: str) -> str:
-        """为该 Linyu 对话生成稳定的 Bot 会话 ID。"""
-        return f"linyu_private:{str(linyu_user_id)}"
-
-    async def _resolve_tts_audio(self, response: str, user_id: str) -> Optional[bytes]:
-        """统一 TTS 合成入口：优先 AI 主动触发，否则走概率触发。"""
-        forced = self.bot.get_last_tts_forced()
-        if forced and forced.get("text"):
-            try:
-                audio = await self.bot.synthesize_speech_forced(forced["text"], user_id=user_id)
-                if audio:
-                    print(f"🎵 语音合成成功（AI主动触发），大小: {len(audio)} bytes")
-                return audio
-            except Exception as e:
-                print(f"❌ TTS强制合成失败: {str(e)}")
-                return None
-
-        try:
-            audio = await self.bot.synthesize_speech(response, user_id=user_id)
-            if audio:
-                print(f"🎵 语音合成成功（概率触发），大小: {len(audio)} bytes")
-            return audio
-        except Exception as e:
-            print(f"❌ TTS合成失败: {str(e)}")
-            return None
 
     def _count_sentences(self, text: str) -> int:
         """统计文本中的句子数量"""
@@ -1020,19 +931,45 @@ class LinyuAdapter:
             await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
             return
 
-        try:
-            segments = smart_split_text(
-                text=message,
-                max_length=self.max_segment_length,
-                min_length=self.min_segment_length,
-                strategy=self.split_strategy
-            )
-        except Exception:
-            segments = [message]
+        segments = []
+        if self.split_strategy == "sentence":
+            sentences = re.split(r'[。！？.!?]+', message.strip())
+            sentences = [s.strip() for s in sentences if s.strip()]
 
-        if len(segments) == 1 and segments[0] == message:
-            await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
-            return
+            merged_sentences = []
+            i = 0
+            while i < len(sentences):
+                current = sentences[i]
+                if len(current) < self.min_segment_length and i < len(sentences) - 1:
+                    next_sentence = sentences[i + 1]
+                    combined = current + "，" + next_sentence
+                    if len(combined) <= self.max_segment_length:
+                        merged_sentences.append(combined)
+                        i += 2
+                    else:
+                        if merged_sentences and len(merged_sentences[-1]) + len(current) + 1 <= self.max_segment_length:
+                            merged_sentences[-1] = merged_sentences[-1] + "，" + current
+                        else:
+                            merged_sentences.append(current)
+                        i += 1
+                else:
+                    merged_sentences.append(current)
+                    i += 1
+
+            segments = merged_sentences
+            if len(segments) == 1 and len(message) <= self.max_segment_length:
+                await self._send_text_once(target_id, message, is_group=is_group, group_id=group_id)
+                return
+        else:
+            try:
+                segments = smart_split_text(
+                    text=message,
+                    max_length=self.max_segment_length,
+                    min_length=self.min_segment_length,
+                    strategy=self.split_strategy
+                )
+            except Exception:
+                segments = [message]
 
         if not segments:
             return

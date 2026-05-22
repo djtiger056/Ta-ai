@@ -272,9 +272,14 @@ class Bot:
         if not lines:
             return
 
-        context = "你对最近和对方聊过的内容有印象（以下是你的回忆片段）。如果当前话题和之前聊过的有关，可以自然地接续；不要原文复述这些内容，不相关就不提：\n" + "\n".join(lines)
+        context = (
+            "你对最近和对方聊过的内容有印象（以下是你的回忆片段）。"
+            "如果当前话题和之前聊过的有关，可以自然地接续；不要原文复述这些内容，不相关就不提：\n"
+            + "\n".join(lines)
+        )
         if enhanced_history and enhanced_history[0]["role"] == "system":
-            enhanced_history[0]["content"] = enhanced_history[0]["content"] + "\n\n" + context
+            base_content = str(enhanced_history[0].get("content", "") or "")
+            enhanced_history[0]["content"] = base_content + "\n\n" + context if base_content else context
         else:
             enhanced_history.insert(0, {
                 "role": "system",
@@ -757,11 +762,14 @@ class Bot:
             first_chunk_seen = False
             mark("llm_stream_start")
             async for chunk in provider.chat_stream(self._to_llm_messages(enhanced_history)):
+                if chunk is None:
+                    continue
                 if not first_chunk_seen:
                     mark("llm_first_chunk")
                     first_chunk_seen = True
-                full_response += chunk
-                yield chunk
+                chunk_text = str(chunk)
+                full_response += chunk_text
+                yield chunk_text
             mark("llm_stream_done")
 
             # 处理回复中的 TTS 标签 [TTS]...[/TTS]
@@ -1052,6 +1060,10 @@ class Bot:
 
     async def _check_reminder_intent(self, message: str, user_id: str, session_id: str) -> str:
         """检测待办事项意图并创建待办事项"""
+        reminder_config = config.get("reminder", {}) or {}
+        if not reminder_config.get("enabled", False):
+            return ""
+
         if not self.memory_manager:
             return ""
 
@@ -1062,10 +1074,6 @@ class Bot:
                 return ""
 
             # 检查是否启用待办事项功能
-            reminder_config = config.get("reminder", {})
-            if not reminder_config.get("enabled", True):
-                return ""
-
             # 创建待办事项检测器
             from ..memory.reminder_detector import ReminderDetector
             timezone = reminder_config.get("timezone", "Asia/Shanghai")

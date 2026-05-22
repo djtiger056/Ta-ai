@@ -973,54 +973,6 @@ const AdminUsersPage: React.FC = () => {
                 ),
               },
               {
-                key: 'proactive_chat',
-                label: '主动聊天',
-                children: (
-                  <div>
-                    <Row gutter={16}>
-                      <Col span={12}>
-                        <Form.Item name={['proactive_chat', 'enabled']} label="启用主动聊天" valuePropName="checked">
-                          <Switch />
-                        </Form.Item>
-                      </Col>
-                      <Col span={12}>
-                        <Form.Item name={['proactive_chat', 'check_interval_seconds']} label="检查间隔(秒)">
-                          <Input type="number" min={10} placeholder="60" allowClear />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                    <Divider titlePlacement="left">每日窗口</Divider>
-                    <Row gutter={16}>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'enabled']} label="启用" valuePropName="checked">
-                          <Switch />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'start']} label="开始时间">
-                          <Input placeholder="08:00" allowClear />
-                        </Form.Item>
-                      </Col>
-                      <Col span={8}>
-                        <Form.Item name={['proactive_chat', 'daily_window', 'end']} label="结束时间">
-                          <Input placeholder="10:00" allowClear />
-                        </Form.Item>
-                      </Col>
-                    </Row>
-                    <Form.Item name={['proactive_chat', 'daily_window', 'max_messages_per_window']} label="最大消息数">
-                      <Input type="number" min={1} placeholder="2" allowClear />
-                    </Form.Item>
-                    <Button 
-                      size="small" 
-                      icon={<ReloadOutlined />}
-                      onClick={() => resetConfigSection('proactive_chat')}
-                    >
-                      重置为默认
-                    </Button>
-                  </div>
-                ),
-              },
-              {
                 key: 'preferences',
                 label: '其他偏好',
                 children: (

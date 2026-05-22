@@ -223,24 +223,40 @@ prompt_enhancer:
   enabled: false
   custom_word_bank_path: data/custom_prompt_words.yaml
 
-proactive_chat:
+cerebellum:
   enabled: false
-  timezone: Asia/Shanghai
-  check_interval_seconds: 60
-  behavior_rules:
-    enabled: true
-    global_cooldown_seconds: 1800
-    inactive_greeting:
+  tick_interval: 30
+  decay_rate: 0.008
+  action_threshold: 0.52
+  persistence_interval: 300
+  state_file: data/cerebellum_state.json
+  max_stimulus_step: 0.28
+  history_limit: 2880
+  replace_time_windows: true
+  motivation_cooldown_seconds: 1800
+  proactive_chat:
+    enabled: false
+    timezone: Asia/Shanghai
+    check_interval_seconds: 60
+    default_prompt: ""
+    behavior_rules:
       enabled: true
-      after_seconds: 21600
-      min_user_messages: 1
-      instruction: ""
-    conversation_follow_up:
-      enabled: true
-      after_seconds: 900
-      min_user_messages: 1
-      instruction: ""
-  targets: []
+      global_cooldown_seconds: 1800
+      inactive_greeting:
+        enabled: true
+        after_seconds: 21600
+        min_user_messages: 1
+        instruction: ""
+      conversation_follow_up:
+        enabled: true
+        after_seconds: 900
+        min_user_messages: 1
+        instruction: ""
+    message_templates: []
+    image_generation:
+      enabled: false
+      max_per_day: 3
+    targets: []
 
 reminder:
   enabled: true

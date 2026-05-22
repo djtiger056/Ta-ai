@@ -5,7 +5,7 @@
 
 用法示例：
 python tools/voice_gateway_smoke_test.py \
-  --base-url http://127.0.0.1:8002 \
+  --base-url http://127.0.0.1:8003 \
   --user-id u_demo \
   --chat-id c_demo \
   --wav-in ./sample_16k_mono_pcm16.wav \
@@ -33,7 +33,7 @@ import websockets
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Voice Gateway 最小联调脚本")
-    parser.add_argument("--base-url", default="http://127.0.0.1:8002", help="后端地址")
+    parser.add_argument("--base-url", default="http://127.0.0.1:8003", help="后端地址")
     parser.add_argument("--user-id", required=True, help="用户ID")
     parser.add_argument("--chat-id", required=True, help="会话ID")
     parser.add_argument("--device-id", default="smoke-device", help="设备ID")

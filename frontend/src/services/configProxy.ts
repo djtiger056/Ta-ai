@@ -203,33 +203,6 @@ export const emoteConfigProxy = {
 }
 
 /**
- * 配置代理 - 主动聊天
- */
-export const proactiveConfigProxy = {
-  getConfig: async () => {
-    if (isCurrentUserAdmin()) {
-      const response = await api.get('/proactive/config')
-      return response.data.config
-    } else {
-      const userConfig = await userConfigApi.getConfig()
-      if (userConfig.proactive_chat && Object.keys(userConfig.proactive_chat).length > 0) {
-        return userConfig.proactive_chat
-      }
-      const response = await api.get('/proactive/config')
-      return response.data.config
-    }
-  },
-
-  updateConfig: async (config: any) => {
-    if (isCurrentUserAdmin()) {
-      await api.post('/proactive/config', config)
-    } else {
-      await userConfigApi.updateConfig({ proactive_chat: config })
-    }
-  },
-}
-
-/**
  * 配置代理 - 系统设置（LLM + 适配器 + 系统提示词）
  */
 export const systemConfigProxy = {

@@ -105,7 +105,7 @@ class DailyHabitsPlugin(MCPPlugin):
             cfg = global_config.get("clock", {}) or {}
             tz_preference = cfg.get("timezone") or os.getenv("CLOCK_TIMEZONE")
             if not tz_preference:
-                tz_preference = global_config.get("proactive_chat", {}).get("timezone")
+                tz_preference = global_config.proactive_chat_config.get("timezone")
         except Exception:
             tz_preference = os.getenv("CLOCK_TIMEZONE")
 

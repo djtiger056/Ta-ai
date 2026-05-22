@@ -171,8 +171,9 @@ class OpenAIProvider(BaseLLMProvider):
                                         data_obj = json.loads(data_str)
                                         if 'choices' in data_obj and len(data_obj['choices']) > 0:
                                             delta = data_obj['choices'][0].get('delta', {})
-                                            if 'content' in delta:
-                                                yield delta['content']
+                                            content = delta.get('content')
+                                            if content is not None:
+                                                yield str(content)
                                     except json.JSONDecodeError:
                                         continue
                             return  # 成功完成，退出重试循环

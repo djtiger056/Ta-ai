@@ -220,7 +220,7 @@ async def start_adapters():
         # 初始化待办事项调度器
         reminder_scheduler: Optional[ReminderScheduler] = None
         reminder_cfg = config.get("reminder", {})
-        if reminder_cfg.get("enabled", True):
+        if reminder_cfg.get("enabled", False):
             reminder_scheduler = ReminderScheduler(
                 check_interval_seconds=reminder_cfg.get("check_interval", 60)
             )
@@ -366,6 +366,8 @@ async def start_adapters():
             print("⏰ 待办事项调度器已启动")
             if reminder_scheduler.task:
                 tasks.append(reminder_scheduler.task)
+        else:
+            print("⏸️ 待办事项功能已停用，跳过调度器启动")
 
         if qq_adapter:
             tasks.append(asyncio.create_task(qq_adapter.start()))
@@ -393,6 +395,6 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host=server_config.get("host", "0.0.0.0"),
-        port=server_config.get("port", 8000),
+        port=server_config.get("port", 8003),
         log_level=log_level,
     )
