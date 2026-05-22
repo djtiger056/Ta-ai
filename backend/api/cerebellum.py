@@ -36,9 +36,11 @@ class CerebellumConfigRequest(BaseModel):
     history_limit: Optional[int] = None
     replace_time_windows: Optional[bool] = None
     motivation_cooldown_seconds: Optional[int] = None
+    require_user_reengagement_after_dispatch: Optional[bool] = None
     baseline_values: Optional[Dict[str, float]] = None
     circadian: Optional[Dict[str, Any]] = None
     inactivity_stimulus: Optional[Dict[str, Any]] = None
+    autonomous_drift: Optional[Dict[str, Any]] = None
 
 
 def set_engine(engine: CerebellumEngine) -> None:

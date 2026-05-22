@@ -6,6 +6,101 @@ import re
 from typing import List
 
 
+SENTENCE_ENDINGS = "。！？.!?"
+
+
+def _split_sentence_chunks(text: str) -> List[str]:
+    """按句末标点切分，并保留标点。"""
+    parts = re.split(r'([。！？.!?]+)', text)
+    chunks: List[str] = []
+
+    for i in range(0, len(parts), 2):
+        content = parts[i]
+        ending = parts[i + 1] if i + 1 < len(parts) else ""
+        chunk = f"{content}{ending}".strip()
+        if chunk:
+            chunks.append(chunk)
+
+    if not chunks and text.strip():
+        return [text.strip()]
+    return chunks
+
+
+def _split_chunk_by_spaces(chunk: str, max_length: int) -> List[str]:
+    """当单句过长时，优先按空格继续分段，再回退到硬切分。"""
+    chunk = chunk.strip()
+    if not chunk:
+        return []
+
+    parts = [part for part in re.split(r'(\s+)', chunk) if part]
+    segments: List[str] = []
+    current = ""
+
+    for part in parts:
+        if part.isspace():
+            if current and not current.endswith(" "):
+                current += " "
+            continue
+
+        candidate = f"{current}{part}" if current else part
+        if len(candidate.strip()) <= max_length:
+            current = candidate
+            continue
+
+        if current.strip():
+            segments.append(current.strip())
+            current = ""
+
+        if len(part) <= max_length:
+            current = part
+            continue
+
+        remaining = part
+        while len(remaining) > max_length:
+            segments.append(remaining[:max_length])
+            remaining = remaining[max_length:]
+        current = remaining
+
+    if current.strip():
+        segments.append(current.strip())
+
+    return segments
+
+
+def _merge_short_segments(segments: List[str], max_length: int, min_length: int) -> List[str]:
+    """合并过短分段，避免发出太碎的消息。"""
+    merged: List[str] = []
+    i = 0
+
+    while i < len(segments):
+        current = segments[i].strip()
+        if not current:
+            i += 1
+            continue
+
+        if len(current) < min_length and i < len(segments) - 1:
+            next_segment = segments[i + 1].strip()
+            separator = "" if current[-1] in SENTENCE_ENDINGS else " "
+            combined = f"{current}{separator}{next_segment}".strip()
+            if len(combined) <= max_length:
+                merged.append(combined)
+                i += 2
+                continue
+
+        if len(current) < min_length and merged:
+            separator = "" if merged[-1][-1] in SENTENCE_ENDINGS else " "
+            combined = f"{merged[-1]}{separator}{current}".strip()
+            if len(combined) <= max_length:
+                merged[-1] = combined
+                i += 1
+                continue
+
+        merged.append(current)
+        i += 1
+
+    return merged
+
+
 def split_text_by_sentences(text: str, max_length: int = 100, min_length: int = 5) -> List[str]:
     """
     按句子分割文本，确保每段不超过最大长度
@@ -18,31 +113,23 @@ def split_text_by_sentences(text: str, max_length: int = 100, min_length: int = 
     Returns:
         分割后的文本列表
     """
-    if len(text) <= max_length:
-        return [text]
-    
-    # 按句号、问号、感叹号分割
-    sentences = re.split(r'[。！？.!?]', text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    
-    segments = []
-    current_segment = ""
-    
-    for sentence in sentences:
-        if len(current_segment + sentence) <= max_length:
-            current_segment += sentence + "。"
+    text = text.strip()
+    if not text:
+        return []
+
+    sentence_chunks = _split_sentence_chunks(text)
+    segments: List[str] = []
+
+    for chunk in sentence_chunks:
+        if len(chunk) <= max_length:
+            segments.append(chunk)
         else:
-            if current_segment:
-                segments.append(current_segment.strip())
-            current_segment = sentence + "。"
-    
-    if current_segment:
-        segments.append(current_segment.strip())
-    
-    # 过滤过短的段落
-    segments = [s for s in segments if len(s) >= min_length]
-    
-    return segments
+            segments.extend(_split_chunk_by_spaces(chunk, max_length))
+
+    if not segments:
+        segments = _split_chunk_by_spaces(text, max_length)
+
+    return _merge_short_segments(segments, max_length, min_length)
 
 
 def split_text_by_length(text: str, max_length: int = 100) -> List[str]:

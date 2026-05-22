@@ -114,7 +114,7 @@ cd ..
 ```bash
 python run.py
 ```
-- 启动后端服务（默认端口：8002）
+- 启动后端服务（默认端口：8003）
 - 检查虚拟环境状态，提供引导
 
 **方式二：分别启动前后端**
@@ -141,8 +141,8 @@ oncestart.bat # 中文界面启动
 ### 访问应用
 
 - **前端管理界面：** http://localhost:3000
-- **后端 API：** http://localhost:8002
-- **API 文档（Swagger UI）：** http://localhost:8002/docs
+- **后端 API：** http://localhost:8003
+- **API 文档（Swagger UI）：** http://localhost:8003/docs
 - **控制台模式：** 运行 `python run.py console`（如果适配器启用）
 
 ### 服务端口配置
@@ -150,7 +150,7 @@ oncestart.bat # 中文界面启动
 后端端口在 `config.yaml` 中配置：
 ```yaml
 server:
-  port: 8002  # 修改此端口号
+  port: 8003  # 修改此端口号
 ```
 
 前端端口在 `frontend/vite.config.ts` 中配置，代理指向后端端口：
@@ -159,7 +159,7 @@ server: {
   port: 3000,
   proxy: {
     '/api': {
-      target: 'http://localhost:8002',  # 与此处保持一致
+      target: 'http://localhost:8003',  # 与此处保持一致
       changeOrigin: true,
     },
   },
@@ -220,10 +220,10 @@ clock:
 **通过 API：**
 ```bash
 # 获取配置
-curl http://localhost:8002/api/config
+curl http://localhost:8003/api/config
 
 # 更新配置
-curl -X PUT http://localhost:8002/api/config -H "Content-Type: application/json" -d '{"section": "llm", "config": {...}}'
+curl -X PUT http://localhost:8003/api/config -H "Content-Type: application/json" -d '{"section": "llm", "config": {...}}'
 ```
 
 ## MCP 扩展系统
@@ -242,7 +242,7 @@ curl -X PUT http://localhost:8002/api/config -H "Content-Type: application/json"
 ### 时钟插件使用
 ```bash
 # 调用内置时钟插件
-curl -X POST http://localhost:8002/api/mcp/plugins/clock/execute \
+curl -X POST http://localhost:8003/api/mcp/plugins/clock/execute \
   -H "Content-Type: application/json" \
   -d '{"tool": "now", "params": {"include_timezone": true}}'
 ```
@@ -344,7 +344,7 @@ npm run preview
 ### 常见问题排查
 
 1. **端口冲突：**
-   - 修改 `config.yaml` 中的 `server.port`（默认8002）
+   - 修改 `config.yaml` 中的 `server.port`（默认8003）
    - 检查是否有其他进程占用端口
    - 确保前端 `vite.config.ts` 中的代理端口与后端一致
 
@@ -360,7 +360,7 @@ npm run preview
 
 4. **前端无法访问后端：**
    - 检查 CORS 设置（已在 `main.py` 中配置）
-   - 验证后端服务是否运行（端口8002）
+   - 验证后端服务是否运行（端口8003）
    - 查看浏览器控制台网络请求
    - 确认代理配置正确（`vite.config.ts`）
 
@@ -385,7 +385,7 @@ npm run preview
 set LFBOT_LLM_API_KEY=sk-...
 
 # 设置服务器端口
-set LFBOT_SERVER_PORT=8000
+set LFBOT_SERVER_PORT=8003
 
 # 设置时区
 set CLOCK_TIMEZONE=Asia/Shanghai
@@ -446,7 +446,7 @@ deactivate
 
 1. **配置文件安全：** `config.yaml` 包含 API 密钥，不应提交到版本控制
 2. **虚拟环境：** 确保在虚拟环境中运行 Python 代码
-3. **端口配置：** 前后端端口需对应，默认为 3000（前端）和 8002（后端）
+3. **端口配置：** 前后端端口需对应，默认为 3000（前端）和 8003（后端）
 4. **依赖版本：** 保持 `requirements.txt` 和 `package.json` 中的依赖版本一致
 5. **Windows 路径：** 项目使用 Windows 路径分隔符，如需在 Linux/macOS 运行需调整路径处理
 6. **时区设置：** 云端部署时注意时区配置，避免时钟插件时间不准

@@ -99,8 +99,8 @@ echo    npm run dev
 echo.
 echo 4. Access application:
 echo    - Frontend: http://localhost:3000
-echo    - Backend: http://localhost:8000
-echo    - API docs: http://localhost:8000/docs
+echo    - Backend: http://localhost:8003
+echo    - API docs: http://localhost:8003/docs
 echo.
 echo 5. Exit virtual environment:
 echo    deactivate

@@ -9,7 +9,7 @@
 - 后端：`systemd` 常驻运行
 - 前端：`Nginx` 托管 `frontend/dist`
 - 访问方式：浏览器访问 `http://你的服务器IP`
-- 接口转发：`/api` 由 Nginx 反代到后端 `127.0.0.1:8002`
+- 接口转发：`/api` 由 Nginx 反代到后端 `127.0.0.1:8003`
 
 这个方案最简单，也最稳定。
 
@@ -57,7 +57,7 @@ pip install -r requirements.txt
 
 - `server.debug: false`
 - `server.host: 127.0.0.1`
-- `server.port: 8002`
+- `server.port: 8003`
 
 如果仓库里还没有 `config.yaml`，首次运行后端时会自动从 `config.example.yaml` 复制生成一份。
 
@@ -119,7 +119,7 @@ server {
     index index.html;
 
     location /api/ {
-        proxy_pass http://127.0.0.1:8002/;
+        proxy_pass http://127.0.0.1:8003;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -206,7 +206,7 @@ sudo tail -f /var/log/nginx/access.log
 检查端口占用：
 
 ```bash
-ss -lntp | grep 8002
+ss -lntp | grep 8003
 ss -lntp | grep 80
 ```
 
