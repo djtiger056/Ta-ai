@@ -236,3 +236,63 @@ async def get_default_rules(token: str = Depends(get_access_token)):
         "content": config.system_rules or "",
         "source": "global_config",
     }
+
+
+# ---- roleplay_prompt 接口 ----
+
+@router.get("/roleplay", response_model=GetRulesResponse)
+async def get_roleplay_prompt(token: str = Depends(get_access_token)):
+    """获取当前用户生效的情景演绎提示词。"""
+    username = await _get_username_from_token(token)
+    custom = prompt_manager.get_roleplay_prompt(username)
+    effective = prompt_manager.get_effective_roleplay_prompt(username)
+    return GetRulesResponse(content=effective, is_custom=custom is not None)
+
+
+@router.put("/roleplay", response_model=UpdatePromptResponse)
+async def update_roleplay_prompt(
+    request: UpdateRulesRequest,
+    token: str = Depends(get_access_token),
+):
+    """更新当前用户的情景演绎提示词。"""
+    username = await _get_username_from_token(token)
+    if not request.content.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="情景演绎提示词不能为空",
+        )
+    success = prompt_manager.set_roleplay_prompt(username=username, content=request.content.strip())
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="情景演绎提示词更新失败",
+        )
+    return UpdatePromptResponse(success=True, content=request.content.strip(), message="情景演绎提示词已更新")
+
+
+@router.delete("/roleplay")
+async def reset_roleplay_prompt(token: str = Depends(get_access_token)):
+    """重置情景演绎提示词为默认。"""
+    username = await _get_username_from_token(token)
+    prompt_manager.delete_roleplay_prompt(username)
+    return {
+        "success": True,
+        "message": "已重置为默认情景演绎提示词",
+        "default_prompt_preview": prompt_manager.get_effective_roleplay_prompt(username)[:200],
+    }
+
+
+@router.get("/roleplay/default")
+async def get_default_roleplay_prompt(token: str = Depends(get_access_token)):
+    """获取默认情景演绎提示词。"""
+    _ = await _get_username_from_token(token)
+    from backend.prompt_system import DEFAULT_ROLEPLAY_PROMPT
+    return {"content": DEFAULT_ROLEPLAY_PROMPT, "source": "builtin"}
+
+
+@router.get("/roleplay/exit-summary/default")
+async def get_default_roleplay_exit_summary_prompt(token: str = Depends(get_access_token)):
+    """获取默认情景结束摘要提示词。"""
+    _ = await _get_username_from_token(token)
+    from backend.core.bot import DEFAULT_ROLEPLAY_EXIT_SUMMARY_PROMPT
+    return {"content": DEFAULT_ROLEPLAY_EXIT_SUMMARY_PROMPT, "source": "builtin"}

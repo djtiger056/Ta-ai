@@ -119,7 +119,7 @@ class DailyScheduleGenerator:
             return False
 
         prompt = self._build_prompt(today, cfg)
-        logger.info("[ScheduleGen] 开始为 %s 生成作息表…", today)
+        logger.debug("[ScheduleGen] 开始为 %s 生成作息表。", today)
 
         try:
             raw = await self._call_llm(prompt, cfg)
@@ -129,11 +129,11 @@ class DailyScheduleGenerator:
 
         slots = self._parse_slots(raw)
         if not slots:
-            logger.error("[ScheduleGen] LLM 返回内容解析失败，原始内容:\n%s", raw[:500])
+            logger.error("[ScheduleGen] LLM 返回内容解析失败，未写入今日作息表。")
             return False
 
         self._write(today, slots)
-        logger.info("[ScheduleGen] 作息表已生成，共 %d 个时间段。", len(slots))
+        logger.debug("[ScheduleGen] 作息表已生成，共 %d 个时间段。", len(slots))
         return True
 
     def get_today_slots(self) -> Optional[List[Dict[str, Any]]]:

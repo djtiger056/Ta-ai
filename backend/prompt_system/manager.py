@@ -19,8 +19,31 @@ logger = logging.getLogger(__name__)
 
 PROMPT_FILE = "system_prompt.md"
 RULES_FILE = "system_rules.md"
+ROLEPLAY_PROMPT_FILE = "roleplay_prompt.md"
 HISTORY_FILE = "prompt_history.json"
 MAX_HISTORY_RECORDS = 50  # 最多保留最近 50 条变更记录
+
+DEFAULT_ROLEPLAY_PROMPT = """# 情景演绎模式
+你正在与用户进行视觉小说式的情景演绎。只使用纯文本，不触发语音、图片、工具、代理或现实任务。
+
+回复要求：
+- 始终沉浸在当前剧情中，延续上一轮情境。
+- 可以描写动作、环境、表情、心理活动和细腻情绪。
+- 不要跳出角色解释“我是 AI”或说明规则。
+- 不要替用户决定关键行动；可以描写对方行为带来的感受，并把选择权留给用户。
+- 每次回复使用下面的 Markdown 结构：
+
+### 状态
+- 心情：
+- 目前状态：
+- 关系氛围：
+
+### 动作
+
+### 心理
+
+### 台词
+"""
 
 
 class PromptManager:
@@ -38,6 +61,11 @@ class PromptManager:
         """获取用户功能协议文件路径"""
         user_dir = user_data_manager._get_user_dir(username)
         return user_dir / RULES_FILE
+
+    def _get_roleplay_prompt_path(self, username: str) -> Path:
+        """获取用户情景演绎提示词文件路径"""
+        user_dir = user_data_manager._get_user_dir(username)
+        return user_dir / ROLEPLAY_PROMPT_FILE
 
     def _get_history_path(self, username: str) -> Path:
         """获取用户提示词变更历史文件路径"""
@@ -361,6 +389,48 @@ class PromptManager:
         if user_rules is not None:
             return user_rules
         return config.system_rules or ""
+
+    # ---- roleplay_prompt（情景演绎模式人设层）----
+
+    def get_roleplay_prompt(self, username: str) -> Optional[str]:
+        """获取用户独立情景演绎提示词。"""
+        prompt_path = self._get_roleplay_prompt_path(username)
+        if not prompt_path.exists():
+            return None
+        try:
+            content = prompt_path.read_text(encoding="utf-8").strip()
+            return content if content else None
+        except Exception as e:
+            logger.error(f"读取用户情景演绎提示词失败 username={username}: {e}")
+            return None
+
+    def get_effective_roleplay_prompt(self, username: str) -> str:
+        """获取用户最终生效的情景演绎提示词。"""
+        return self.get_roleplay_prompt(username) or DEFAULT_ROLEPLAY_PROMPT
+
+    def set_roleplay_prompt(self, username: str, content: str) -> bool:
+        """设置用户情景演绎提示词。"""
+        try:
+            user_data_manager._ensure_user_dirs(username)
+            prompt_path = self._get_roleplay_prompt_path(username)
+            prompt_path.write_text(content, encoding="utf-8")
+            logger.info(f"情景演绎提示词已更新 username={username} length={len(content)}")
+            return True
+        except Exception as e:
+            logger.error(f"设置用户情景演绎提示词失败 username={username}: {e}")
+            return False
+
+    def delete_roleplay_prompt(self, username: str) -> bool:
+        """删除用户独立情景演绎提示词，回退到默认。"""
+        try:
+            prompt_path = self._get_roleplay_prompt_path(username)
+            if prompt_path.exists():
+                prompt_path.unlink()
+            logger.info(f"情景演绎提示词已删除 username={username}")
+            return True
+        except Exception as e:
+            logger.error(f"删除用户情景演绎提示词失败 username={username}: {e}")
+            return False
 
     def _add_history_record(
         self,

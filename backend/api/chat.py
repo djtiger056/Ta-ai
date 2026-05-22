@@ -34,6 +34,16 @@ async def chat(request: ChatRequest):
         response = await bot.chat(request.message, request.user_id, session_id=session_id)
         proactive_api.record_assistant_activity("web", request.user_id, session_id, response)
 
+        if bot.pop_last_mode_command(request.user_id, session_id) or await bot.is_roleplay_mode(request.user_id):
+            return {
+                "response": response,
+                "audio": None,
+                "audio_mime": None,
+                "voice_only": False,
+                "emote": None,
+                "image": None,
+            }
+
         # 获取生成的图片（如果有）
         last_image = bot.get_last_generated_image()
         image_base64 = None
@@ -150,6 +160,11 @@ async def chat_stream(request: ChatRequest):
 
             yield meta_event("llm_stream_done", {"response_chars": len(full_response)})
             proactive_api.record_assistant_activity("web", request.user_id, session_id, full_response)
+
+            if bot.pop_last_mode_command(request.user_id, session_id) or await bot.is_roleplay_mode(request.user_id):
+                yield meta_event("stream_done")
+                yield "data: [DONE]\n\n"
+                return
 
             # 获取生成的图片（如果有）
             last_image = bot.get_last_generated_image()

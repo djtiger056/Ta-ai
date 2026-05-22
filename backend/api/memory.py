@@ -122,6 +122,14 @@ async def _ensure_memory_owner_access(manager: Any, user: Any, memory_id: str) -
     owner_user_id = str((metadatas[0] or {}).get("user_id") or "").strip() if metadatas else ""
     _ensure_user_id_access(user, owner_user_id)
 
+
+def _split_roleplay_memory_user_id(user_id: str) -> tuple[str, bool]:
+    suffix = "::roleplay"
+    raw = str(user_id or "")
+    if raw.endswith(suffix):
+        return raw[:-len(suffix)], True
+    return raw, False
+
 def get_memory_manager():
     """获取共享记忆管理器实例"""
     global _memory_manager

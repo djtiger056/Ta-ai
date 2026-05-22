@@ -105,6 +105,10 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
     # 返回更新后的配置
     get_bot().invalidate_user_cache(str(user_info['user_id']))
     config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
+    try:
+        get_bot().invalidate_user_cache(str(user_info['user_id']))
+    except Exception:
+        pass
     manager = get_linyu_session_manager()
     if manager:
         manager.request_refresh_user(str(user_info['user_id']))
@@ -192,7 +196,11 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             detail="配置重置失败"
         )
 
-    get_bot().invalidate_user_cache(str(user_info['user_id']))
+    try:
+        get_bot().invalidate_user_cache(str(user_info['user_id']))
+    except Exception:
+        pass
+
     manager = get_linyu_session_manager()
     if manager:
         manager.request_refresh_user(str(user_info['user_id']))
