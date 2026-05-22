@@ -42,17 +42,40 @@ def get_timezone(tz_name: Optional[str] = None):
 
 class ReminderDetector:
     """待办事项意图检测器"""
+
+    EXPLICIT_REMINDER_RE = re.compile(
+        r"(提醒我|帮我提醒|麻烦提醒|麻烦你提醒|请提醒|到时候提醒|提醒一下|提醒下|"
+        r"叫我|喊我|叫醒我)"
+    )
+    SOFT_REMINDER_RE = re.compile(r"(记得|别忘了|别忘记|不要忘了)")
+    MEMORY_TALK_RE = re.compile(
+        r"(我记得|你记得|还记得|记不记得|记得吗|记得么|记得吧|记得不|"
+        r"记得我|记得你|记得他|记得她|记得之前|记得以前|记得上次|记得刚才)"
+    )
+    RELATIVE_TIME_RE = re.compile(r"(\d+)\s*(分钟|小时|天)\s*后?")
+    FUZZY_TIME_RE = re.compile(
+        r"(等会|晚点|稍后|一会儿|过会儿|马上|今晚|明早|明天早上|明天中午|明天晚上|"
+        r"今天早上|今天中午|今天下午|今天晚上|明天|后天|下周|周末|中午|下午|晚上|"
+        r"\d{1,2}\s*[点:：]\s*\d{0,2})"
+    )
+    TASK_VERB_RE = re.compile(
+        r"(起床|吃饭|喝水|复习|考试|开会|取|拿|买|做|交|还|发|联系|打电话|"
+        r"预约|提交|发送|处理|出门|睡觉)"
+    )
+    EMPTY_CONTENTS = {"", "提醒", "提醒我", "一下", "下", "我", "你", "一下我", "记得", "别忘了"}
     
-    def __init__(self, provider, timezone: str = "Asia/Shanghai"):
+    def __init__(self, provider, timezone: str = "Asia/Shanghai", enable_llm_fallback: bool = False):
         """
         初始化检测器
         
         Args:
             provider: LLM提供商实例
             timezone: 时区
+            enable_llm_fallback: 是否允许在规则无法解析时调用LLM兜底
         """
         self.provider = provider
         self.timezone = get_timezone(timezone)
+        self.enable_llm_fallback = enable_llm_fallback
         
         # 时间表达式映射
         self.time_patterns = {
@@ -79,6 +102,7 @@ class ReminderDetector:
             "今晚": lambda now: self._get_tonight_time(now),
             "中午": lambda now: self._get_today_noon(now),
             "下午": lambda now: self._get_today_afternoon(now),
+            "晚上": lambda now: self._get_today_evening(now),
         }
     
     async def detect_reminder_intent(self, message: str) -> Optional[Dict[str, Any]]:
@@ -101,16 +125,21 @@ class ReminderDetector:
             # 首先使用正则表达式快速检测（更可靠）
             result = self._quick_detect_reminder(message)
             if result:
+                allow_default = bool(result.pop("_allow_default_time", False))
                 trigger_time = self._calculate_trigger_time(
                     result.get("time_expression", ""),
-                    result.get("time_hint", "")
+                    result.get("time_hint", ""),
+                    allow_default=allow_default
                 )
                 if trigger_time:
                     result["trigger_time"] = trigger_time
                     return result
             
-            # 如果正则检测失败，尝试使用LLM
-            return await self._detect_with_llm(message)
+            # 只有通过本地候选门的消息才允许进入LLM兜底，避免普通聊天被模型误判。
+            if self.enable_llm_fallback and self._is_reminder_candidate(message):
+                return await self._detect_with_llm(message)
+
+            return None
             
         except Exception as e:
             print(f"待办事项意图检测失败: {e}")
@@ -119,20 +148,15 @@ class ReminderDetector:
     def _quick_detect_reminder(self, message: str) -> Optional[Dict[str, Any]]:
         """使用正则表达式快速检测待办事项意图"""
         message = message.strip()
+        if not self._is_reminder_candidate(message):
+            return None
 
-        # 提醒意图关键词 - 必须包含这些词之一才认为是待办事项
-        reminder_intent_keywords = r'(提醒我|记得|别忘了|叫我|喊我|记得要|别忘了要)'
-        has_reminder_intent = re.search(reminder_intent_keywords, message)
-
-        # 检测 "X分钟后" - 必须有提醒意图关键词
+        # 检测 "X分钟后"
         match = re.search(r'(\d+)\s*分钟\s*后?', message)
         if match:
-            # 必须有提醒意图关键词，否则只是普通陈述
-            if not has_reminder_intent:
-                return None
             minutes = int(match.group(1))
             content = self._extract_reminder_content(message)
-            if content:
+            if self._is_meaningful_content(content):
                 return {
                     "is_reminder": True,
                     "content": content,
@@ -141,15 +165,12 @@ class ReminderDetector:
                     "reminder_message": f"提醒你：{content}"
                 }
 
-        # 检测 "X小时后" - 必须有提醒意图关键词
+        # 检测 "X小时后"
         match = re.search(r'(\d+)\s*小时\s*后?', message)
         if match:
-            # 必须有提醒意图关键词，否则只是普通陈述
-            if not has_reminder_intent:
-                return None
             hours = int(match.group(1))
             content = self._extract_reminder_content(message)
-            if content:
+            if self._is_meaningful_content(content):
                 return {
                     "is_reminder": True,
                     "content": content,
@@ -158,15 +179,26 @@ class ReminderDetector:
                     "reminder_message": f"提醒你：{content}"
                 }
 
-        # 检测 "等会/晚点/稍后" - 必须有提醒意图关键词
-        match = re.search(r'(等会|晚点|稍后|一会儿|过会儿)', message)
+        # 检测 "X天后"
+        match = re.search(r'(\d+)\s*天\s*后?', message)
         if match:
-            # 必须有提醒意图关键词，否则只是普通陈述
-            if not has_reminder_intent:
-                return None
+            days = int(match.group(1))
+            content = self._extract_reminder_content(message)
+            if self._is_meaningful_content(content):
+                return {
+                    "is_reminder": True,
+                    "content": content,
+                    "time_expression": f"{days}天后",
+                    "time_hint": f"{days}天后",
+                    "reminder_message": f"提醒你：{content}"
+                }
+
+        # 检测 "等会/晚点/今晚/明天/中午/下午/8点" 等时间表达
+        match = self.FUZZY_TIME_RE.search(message)
+        if match:
             time_expr = match.group(1)
             content = self._extract_reminder_content(message)
-            if content:
+            if self._is_meaningful_content(content):
                 return {
                     "is_reminder": True,
                     "content": content,
@@ -174,82 +206,73 @@ class ReminderDetector:
                     "time_hint": "",
                     "reminder_message": f"提醒你：{content}"
                 }
-        
-        # 检测 "今晚/明早" 等明确时间 - 必须同时有提醒意图关键词
-        for time_expr in ["今晚", "明早", "明天早上", "明天中午", "明天晚上", "今天中午", "今天下午", "今天晚上"]:
-            if time_expr in message:
-                # 必须有提醒意图关键词，否则只是普通聊天
-                if not has_reminder_intent:
-                    continue
-                content = self._extract_reminder_content(message)
-                if content:
-                    return {
-                        "is_reminder": True,
-                        "content": content,
-                        "time_expression": time_expr,
-                        "time_hint": "",
-                        "reminder_message": f"提醒你：{content}"
-                    }
-        
+
         # 检测 "提醒我起床/吃饭/喝水/复习/考试"
-        match = re.search(r'(提醒我|叫我|喊我)(起床|吃饭|喝水|复习|考试)', message)
+        match = re.search(r'(提醒我|叫我|喊我|叫醒我)\s*([^，。！？,.!?]{1,80})', message)
         if match:
-            action = match.group(2)
+            action = self._clean_content(match.group(2))
+            if not self._is_meaningful_content(action):
+                return None
             return {
                 "is_reminder": True,
                 "content": action,
                 "time_expression": "",
                 "time_hint": "",
+                "_allow_default_time": True,
                 "reminder_message": f"提醒你：{action}"
             }
 
-        # 检测只有提醒意图关键词但没有具体时间的情况（如"记得提醒我"、"提醒我"）
-        if has_reminder_intent:
-            content = self._extract_reminder_content(message)
-            if content:
-                return {
-                    "is_reminder": True,
-                    "content": content,
-                    "time_expression": "",
-                    "time_hint": "",
-                    "reminder_message": f"提醒你：{content}"
-                }
-            # 如果提取的内容为空，但有提醒意图，使用默认内容
-            return {
-                "is_reminder": True,
-                "content": "提醒",
-                "time_expression": "",
-                "time_hint": "",
-                "reminder_message": "提醒你"
-            }
-
         return None
+
+    def _is_reminder_candidate(self, message: str) -> bool:
+        """本地候选门：只有明确像提醒请求的句子才进入解析/LLM兜底。"""
+        message = (message or "").strip()
+        if len(message) < 3:
+            return False
+
+        has_explicit = bool(self.EXPLICIT_REMINDER_RE.search(message))
+        has_soft = bool(self.SOFT_REMINDER_RE.search(message))
+        has_time = bool(self.RELATIVE_TIME_RE.search(message) or self.FUZZY_TIME_RE.search(message))
+
+        if has_explicit:
+            return True
+
+        if not has_soft:
+            return False
+
+        if self.MEMORY_TALK_RE.search(message):
+            return False
+
+        if not has_time:
+            return False
+
+        after_soft = self.SOFT_REMINDER_RE.split(message, maxsplit=1)[-1].strip()
+        if after_soft.startswith(("我", "你", "他", "她", "ta", "TA", "之前", "以前", "上次", "刚才")):
+            return False
+
+        return bool(self.TASK_VERB_RE.search(message) or "提醒" in message)
     
     def _extract_reminder_content(self, message: str) -> str:
         """提取待办事项内容"""
-        content = message
+        return self._clean_content(message)
 
-        # 检查消息中是否包含"提醒我"关键词
-        has_reminder_keyword = re.search(r'提醒我|叫我|喊我', message)
+    def _clean_content(self, message: str) -> str:
+        """清理提醒内容中的请求词、时间词和语气词。"""
+        content = str(message or "").strip()
+        content = re.sub(r'^(麻烦|麻烦你|帮我|请|拜托|可以的话)\s*', '', content)
+        content = re.sub(r'^(记得要|别忘了要|记得|别忘了|别忘记|不要忘了)\s*', '', content)
+        content = re.sub(r'(提醒我|帮我提醒|麻烦提醒|麻烦你提醒|请提醒|到时候提醒|提醒一下|提醒下|叫醒我|叫我|喊我)\s*', '', content)
+        content = self.RELATIVE_TIME_RE.sub('', content)
+        content = self.FUZZY_TIME_RE.sub('', content)
+        content = re.sub(r'\s+', ' ', content)
+        content = re.sub(r'^[，。！？,.!?:：；;\s]+|[，。！？,.!?:：；;\s]+$', '', content)
+        content = re.sub(r'(吧|哦|噢|呀|哈|可以吗|行吗|好吗)$', '', content).strip()
+        return content
 
-        if has_reminder_keyword:
-            # 如果包含"提醒我"关键词，只移除前面的"记得"、"别忘了"等前缀
-            content = re.sub(r'^(记得|别忘了|记得要|别忘了要)\s*', '', message)
-            # 移除时间相关描述
-            content = re.sub(r'\d+\s*(分钟|小时)\s*后?\s*', '', content)
-            content = re.sub(r'(等会|晚点|稍后|一会儿|过会儿)\s*', '', content)
-        else:
-            # 如果不包含"提醒我"关键词，移除"提醒我"、"叫我"等前缀
-            content = re.sub(r'^(记得|提醒我|叫我|喊我)\s*', '', message)
-            # 移除时间相关描述
-            content = re.sub(r'\d+\s*(分钟|小时)\s*后?\s*', '', content)
-            content = re.sub(r'(等会|晚点|稍后|一会儿|过会儿)\s*', '', content)
-            # 移除 "提醒我"、"叫我" 等后缀
-            content = re.sub(r'(提醒我|叫我|喊我).*$', '', content)
-
-        # 清理空白
-        content = content.strip()
-        return content if content else ""
+    def _is_meaningful_content(self, content: str) -> bool:
+        """过滤“提醒我一下”这类没有实际事项的内容。"""
+        compact = re.sub(r'\s+', '', str(content or ""))
+        return len(compact) >= 2 and compact not in self.EMPTY_CONTENTS
     
     async def _detect_with_llm(self, message: str) -> Optional[Dict[str, Any]]:
         """使用LLM检测待办事项意图"""
@@ -266,10 +289,15 @@ class ReminderDetector:
         result = self._parse_llm_response(response)
         
         if result and result.get("is_reminder"):
+            content = str(result.get("content", "") or "").strip()
+            if not self._is_meaningful_content(content):
+                return None
+
             # 计算触发时间
             trigger_time = self._calculate_trigger_time(
                 result.get("time_expression", ""),
-                result.get("time_hint", "")
+                result.get("time_hint", ""),
+                allow_default=self._allows_default_time(message)
             )
             
             if trigger_time:
@@ -291,8 +319,9 @@ class ReminderDetector:
 
 判断标准：
 1. 用户明确要求在未来某个时间点提醒或通知
-2. 包含时间相关词汇（今晚、明早、晚点、等会等）
-3. 包含提醒相关动词（记得、提醒、别忘了、叫醒等）
+2. 仅有时间词（今晚、明早、晚点、等会等）不算提醒
+3. 仅在回忆语境里出现“记得”（如“你还记得吗”“我记得”）不算提醒
+4. 没有具体事项内容时不要创建提醒
 
 示例：
 输入："记得中午提醒我去取个快递"
@@ -322,7 +351,16 @@ class ReminderDetector:
             print(f"解析LLM响应失败: {e}, 响应内容: {response}")
             return None
     
-    def _calculate_trigger_time(self, time_expression: str, time_hint: str = "") -> Optional[datetime]:
+    def _allows_default_time(self, message: str) -> bool:
+        """没有时间表达时，只有明确“提醒我/叫我/喊我 + 事项”允许默认30分钟后。"""
+        return bool(re.search(r'(提醒我|叫我|喊我|叫醒我)\s*[^，。！？,.!?]{2,}', message or ""))
+
+    def _calculate_trigger_time(
+        self,
+        time_expression: str,
+        time_hint: str = "",
+        allow_default: bool = False
+    ) -> Optional[datetime]:
         """
         计算触发时间
         
@@ -337,6 +375,10 @@ class ReminderDetector:
         now = get_now()
         
         # 先尝试匹配时间表达式
+        clock_time = self._parse_clock_time(time_expression, now)
+        if clock_time:
+            return clock_time
+
         for pattern, time_func in self.time_patterns.items():
             if pattern in time_expression:
                 return time_func(now)
@@ -345,8 +387,26 @@ class ReminderDetector:
         if time_hint:
             return self._parse_time_hint(time_hint, now)
         
-        # 如果没有匹配到，默认30分钟后
-        return now + timedelta(minutes=30)
+        if allow_default:
+            return now + timedelta(minutes=30)
+
+        return None
+
+    def _parse_clock_time(self, time_expression: str, now: datetime) -> Optional[datetime]:
+        """解析“8点”“20:30”“20：30”这类当天钟点，已过则顺延到明天。"""
+        match = re.search(r'(\d{1,2})\s*(?:点|:|：)\s*(\d{1,2})?', time_expression or "")
+        if not match:
+            return None
+
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        if hour > 23 or minute > 59:
+            return None
+
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
     
     def _parse_time_hint(self, time_hint: str, now: datetime) -> Optional[datetime]:
         """解析时间提示"""

@@ -245,6 +245,7 @@ proactive_chat:
 reminder:
   enabled: true
   check_interval: 60
+  llm_fallback_enabled: false
 
 voice_gateway:
   enabled: false

@@ -10,13 +10,18 @@ from pathlib import Path
 import logging
 import chromadb
 from chromadb.config import Settings
-from sentence_transformers import SentenceTransformer
 import aiohttp
 from datetime import datetime
 from backend.utils.datetime_utils import get_now, to_isoformat
 
 
 logger = logging.getLogger(__name__)
+
+
+def _load_sentence_transformer(model_name: str):
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(model_name)
 
 
 class VectorStore:
@@ -86,7 +91,7 @@ class VectorStore:
                 print(f"正在加载嵌入模型: {self.embedding_model_name} (超时: 60秒)")
                 # 在单独线程中加载模型，避免阻塞事件循环
                 self.embedding_model = await asyncio.wait_for(
-                    asyncio.to_thread(SentenceTransformer, self.embedding_model_name),
+                    asyncio.to_thread(_load_sentence_transformer, self.embedding_model_name),
                     timeout=60.0
                 )
                 try:
@@ -106,7 +111,7 @@ class VectorStore:
                 try:
                     print("尝试加载更小的模型: all-MiniLM-L6-v2 (超时: 30秒)")
                     self.embedding_model = await asyncio.wait_for(
-                        asyncio.to_thread(SentenceTransformer, "all-MiniLM-L6-v2"),
+                        asyncio.to_thread(_load_sentence_transformer, "all-MiniLM-L6-v2"),
                         timeout=30.0
                     )
                     try:

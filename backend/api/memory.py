@@ -23,6 +23,14 @@ def _build_memory_user_display(user: Any, fallback_user_id: str) -> str:
     linyu_account = str(getattr(user, "linyu_account", None) or getattr(user, "linyu_user_id", None) or "").strip() or "-"
     return f"{username} | QQ:{qq_id} | Linyu:{linyu_account}"
 
+
+def _split_roleplay_memory_user_id(user_id: str) -> tuple[str, bool]:
+    suffix = "::roleplay"
+    raw = str(user_id or "")
+    if raw.endswith(suffix):
+        return raw[:-len(suffix)], True
+    return raw, False
+
 def get_memory_manager():
     """获取共享记忆管理器实例"""
     global _memory_manager
@@ -140,18 +148,24 @@ async def get_memory_users():
         try:
             from backend.user import user_manager
             for uid in user_ids:
+                base_uid, is_roleplay = _split_roleplay_memory_user_id(uid)
                 info = {"user_id": uid, "display_name": uid, "selector_key": uid}
                 # 尝试按 qq_user_id 查找
-                user = await user_manager.get_user_by_qq_id(uid)
-                if not user and uid.isdigit():
-                    user = await user_manager.get_user_by_id(int(uid))
+                user = await user_manager.get_user_by_qq_id(base_uid)
+                if not user and base_uid.isdigit():
+                    user = await user_manager.get_user_by_id(int(base_uid))
                 if not user:
                     # 尝试按 username 查找
-                    user = await user_manager.get_user_by_username(uid)
+                    user = await user_manager.get_user_by_username(base_uid)
                 if user:
                     display_name = _build_memory_user_display(user, uid)
+                    if is_roleplay:
+                        display_name = f"{display_name}（情景演绎）"
                     info["display_name"] = display_name
                     info["selector_key"] = display_name
+                elif is_roleplay:
+                    info["display_name"] = f"{base_uid}（情景演绎）"
+                    info["selector_key"] = info["display_name"]
                 user_info_list.append(info)
         except Exception:
             # 如果用户管理器不可用，回退到纯 ID 列表

@@ -74,35 +74,9 @@ class UserResourceCache:
             if (current_time - cache_time).total_seconds() < self._config_cache_ttl:
                 return self._user_configs.get(user_id, {})
 
-        # 从数据库加载用户配置
         user_config = {}
-
         try:
-            # Web 端传数字字符串 user_id，QQ 端传 QQ 号（也是数字字符串）
-            # 优先按数字 ID 查（Web 端），再按 QQ ID 查（QQ 端）
-            user = None
-
-            if str(user_id).isdigit():
-                user = await user_manager.get_user_by_id(int(user_id))
-
-            if user is None:
-                # 尝试按 QQ ID 查
-                user = await user_manager.get_user_by_qq_id(str(user_id))
-
-            if user is None:
-                # 尝试按 Linyu ID 查
-                user = await user_manager.get_user_by_linyu_id(str(user_id))
-
-            if user is None and not str(user_id).isdigit():
-                # 非纯数字且非 UUID 格式，可能是 QQ 号首次接触，自动建档
-                # UUID 格式的 ID（如 Linyu fromId）不应走此路径
-                is_uuid = len(str(user_id)) == 36 and str(user_id).count("-") == 4
-                if not is_uuid:
-                    try:
-                        user = await user_manager.get_or_create_user_by_qq_id(str(user_id))
-                    except Exception as e:
-                        logger.warning(f"自动创建 QQ 用户失败 user_id={user_id}: {e}")
-
+            user = await self.resolve_user(user_id)
             if user:
                 user_config = await user_manager.get_user_config_dict(user.id)
                 # 缓存 user_id -> username 映射（供提示词系统使用）
@@ -115,6 +89,32 @@ class UserResourceCache:
         self._user_config_cache_time[user_id] = current_time
 
         return user_config
+
+    async def resolve_user(self, user_id: str):
+        """按 Web 数字 ID、QQ ID、Linyu ID 解析真实用户。"""
+        user = None
+        user_id_str = str(user_id)
+
+        if user_id_str.isdigit():
+            user = await user_manager.get_user_by_id(int(user_id_str))
+
+        if user is None:
+            user = await user_manager.get_user_by_qq_id(user_id_str)
+
+        if user is None:
+            user = await user_manager.get_user_by_linyu_id(user_id_str)
+
+        if user is None and not user_id_str.isdigit():
+            is_uuid = len(user_id_str) == 36 and user_id_str.count("-") == 4
+            if not is_uuid:
+                try:
+                    user = await user_manager.get_or_create_user_by_qq_id(user_id_str)
+                except Exception as e:
+                    logger.warning(f"自动创建 QQ 用户失败 user_id={user_id}: {e}")
+
+        if user:
+            self._user_id_to_username[user_id_str] = user.username
+        return user
 
     def get_merged_config(self, user_id: str) -> Dict[str, Any]:
         """获取合并后的用户配置（全局 + 用户覆盖）。
@@ -246,6 +246,39 @@ class UserResourceCache:
         if username:
             return prompt_manager.get_effective_rules(username)
         return config.system_rules or ""
+
+    def get_roleplay_prompt(self, user_id: str) -> str:
+        """获取用户情景演绎模式提示词。"""
+        username = self._resolve_username(user_id)
+        if username:
+            return prompt_manager.get_effective_roleplay_prompt(username)
+        from ..prompt_system import DEFAULT_ROLEPLAY_PROMPT
+        return DEFAULT_ROLEPLAY_PROMPT
+
+    def get_chat_mode(self, user_id: str) -> str:
+        """获取用户聊天模式，默认 companion。"""
+        user_config = self._user_configs.get(user_id, {}) or {}
+        preferences = user_config.get("preferences", {}) or {}
+        mode = str(preferences.get("chat_mode", "companion") or "companion").strip().lower()
+        return "roleplay" if mode == "roleplay" else "companion"
+
+    def get_roleplay_memory_config(self, user_id: str) -> Dict[str, Any]:
+        """获取用户情景演绎记忆配置覆盖项。"""
+        user_config = self._user_configs.get(user_id, {}) or {}
+        preferences = user_config.get("preferences", {}) or {}
+        roleplay_memory = preferences.get("roleplay_memory", {}) or {}
+        return roleplay_memory if isinstance(roleplay_memory, dict) else {}
+
+    def invalidate_user(self, user_id: str) -> None:
+        """清理指定用户缓存，使配置变更立即生效。"""
+        self._user_configs.pop(user_id, None)
+        self._user_config_cache_time.pop(user_id, None)
+        self._user_providers.pop(user_id, None)
+        self._user_provider_signatures.pop(user_id, None)
+        self._user_tts_managers.pop(user_id, None)
+        self._user_tts_signatures.pop(user_id, None)
+        self._user_image_gen_managers.pop(user_id, None)
+        self._user_image_gen_signatures.pop(user_id, None)
 
     def _resolve_username(self, user_id: str) -> Optional[str]:
         """从 user_id 解析出 username（用于提示词系统文件路径）。

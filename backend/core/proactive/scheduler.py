@@ -34,6 +34,7 @@ class ProactiveChatScheduler:
         self.target_state: Dict[str, ProactiveTargetState] = {}
         self._config: Dict[str, Any] = config.proactive_chat_config or {}
         self._warning_state: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        self._daily_schedule_auto_attempt_date: Optional[str] = None
 
     def register_sender(self, channel: str, sender: Callable[[Dict[str, Any], Union[str, Dict[str, Any]]], Awaitable[None]]):
         """注册发送器（例如 QQ 私聊）。sender 接受 target dict 与文本或包含 image 的 payload。"""
@@ -847,14 +848,20 @@ class ProactiveChatScheduler:
             if generator.is_generated_today():
                 return
 
-            print(f"[ScheduleGen] 今日作息表尚未生成，当前时间 {now.strftime('%H:%M')}，开始生成…")
+            today_key = now.date().isoformat()
+            if self._daily_schedule_auto_attempt_date == today_key:
+                return
+            self._daily_schedule_auto_attempt_date = today_key
+
             success = await generator.generate_for_today()
             if success:
-                print("[ScheduleGen] 今日作息表生成完成。")
+                print("[ScheduleGen] 今日作息表生成成功。")
             else:
-                print("[ScheduleGen] 今日作息表生成失败或已跳过。")
+                print("[ScheduleGen] 今日作息表生成失败，请检查 LLM 配置或手动重试。")
         except Exception as exc:
-            print(f"[ScheduleGen] 生成作息表时出错: {exc}")
+            if hasattr(now, "date"):
+                self._daily_schedule_auto_attempt_date = now.date().isoformat()
+            print(f"[ScheduleGen] 今日作息表生成失败: {exc}")
 
     def status_snapshot(self) -> Dict[str, Any]:
         return {

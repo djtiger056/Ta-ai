@@ -21,6 +21,7 @@ import {
   GlobalOutlined,
   DashboardOutlined,
   RocketOutlined,
+  BookOutlined,
 } from '@ant-design/icons'
 import ChatPage from './pages/ChatPage'
 import SettingsPage from './pages/SettingsPage'
@@ -40,6 +41,7 @@ import AgentDelegatePage from './pages/AgentDelegatePage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import LoginPage from './pages/LoginPage'
 import AdminGlobalConfigPage from './pages/AdminGlobalConfigPage'
+import RoleplayModePage from './pages/RoleplayModePage'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 
@@ -67,6 +69,11 @@ const MainLayout: React.FC = () => {
       key: '/personality',
       icon: <UserOutlined />,
       label: '人格设定',
+    },
+    {
+      key: '/roleplay-mode',
+      icon: <BookOutlined />,
+      label: '情景模式',
     },
     {
       key: '/tts',
@@ -234,6 +241,7 @@ const MainLayout: React.FC = () => {
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/settings" element={<UserSettingsPage />} />
             <Route path="/personality" element={<PersonalityPage />} />
+            <Route path="/roleplay-mode" element={<RoleplayModePage />} />
             <Route path="/tts" element={<TTSConfigPage />} />
             <Route path="/image-gen" element={<ImageGenPage />} />
             <Route path="/prompt-enhancer" element={<PromptEnhancerPage />} />

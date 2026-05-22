@@ -4,7 +4,7 @@
 
     user_data/
     └── {username}/
-        ├── config.yaml     ← 用户个人配置（覆盖全局 config.yaml 中对应字段）
+        ├── config.yaml     ← 用户个人配置（初始化时复制根目录 config.yaml）
         ├── images/         ← 图生图等生成的图片
         ├── logs/           ← 聊天日志
         ├── uploads/        ← 用户上传的文件
@@ -12,6 +12,7 @@
 """
 import shutil
 import yaml
+import copy
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from datetime import datetime
@@ -29,12 +30,14 @@ class UserDataManager:
     VOICE_SAMPLES_DIR = "voice_samples"
     USER_CONFIG_FILE = "config.yaml"
 
-    def __init__(self, base_path: Optional[str] = None):
+    def __init__(self, base_path: Optional[str] = None, admin_config_path: Optional[str] = None):
+        project_root = Path(__file__).resolve().parents[2]
         if base_path:
             self.base_path = Path(base_path)
         else:
-            project_root = Path(__file__).resolve().parents[2]
             self.base_path = project_root / "user_data"
+        self.admin_config_path = Path(admin_config_path) if admin_config_path else project_root / "config.yaml"
+        self.example_config_path = self.admin_config_path.with_name("config.example.yaml")
         self.base_path.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------
@@ -55,6 +58,7 @@ class UserDataManager:
     def init_user_data(self, username: str) -> Path:
         """初始化用户数据目录（创建时调用）"""
         user_dir = self._ensure_user_dirs(username)
+        self.ensure_user_config(username)
         logger.info(f"初始化用户数据目录: {user_dir}")
         return user_dir
 
@@ -66,10 +70,75 @@ class UserDataManager:
         """返回用户配置文件路径（user_data/{username}/config.yaml）"""
         return self._get_user_dir(username) / self.USER_CONFIG_FILE
 
+    def _get_admin_config_source(self) -> Optional[Path]:
+        """返回可复制的管理员兜底配置文件路径。"""
+        if self.admin_config_path.exists():
+            return self.admin_config_path
+        if self.example_config_path.exists():
+            return self.example_config_path
+        return None
+
+    def _load_admin_config(self) -> Dict[str, Any]:
+        """加载根目录管理员兜底配置，不存在或格式异常时返回空 dict。"""
+        source = self._get_admin_config_source()
+        if not source:
+            return {}
+        try:
+            with open(source, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.error(f"加载管理员兜底配置失败 path={source}: {e}")
+            return {}
+
+    def ensure_user_config(self, username: str, *, overwrite: bool = False) -> bool:
+        """确保用户 config.yaml 存在。
+
+        默认直接复制根目录 config.yaml 的完整文件内容。overwrite=True 时会用
+        最新管理员兜底配置覆盖用户配置，用于“重置全部配置”。已有的旧式局部
+        用户配置会自动用管理员配置补齐缺失字段，同时保留用户已修改的值。
+        """
+        try:
+            self._ensure_user_dirs(username)
+            config_path = self.get_user_config_path(username)
+            if config_path.exists() and not overwrite:
+                existing: Dict[str, Any] = {}
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        loaded = yaml.safe_load(f)
+                    if isinstance(loaded, dict):
+                        existing = loaded
+                except Exception:
+                    return True
+
+                admin_config = self._load_admin_config()
+                if not admin_config:
+                    return True
+
+                merged = _deep_merge(admin_config, existing)
+                if merged != existing:
+                    with open(config_path, 'w', encoding='utf-8') as f:
+                        yaml.dump(merged, f, default_flow_style=False, allow_unicode=True)
+                    logger.info(f"补齐用户配置: username={username}, path={config_path}")
+                return True
+
+            source = self._get_admin_config_source()
+            if source:
+                shutil.copyfile(source, config_path)
+            else:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.dump({}, f, default_flow_style=False, allow_unicode=True)
+
+            logger.info(f"初始化用户配置: username={username}, path={config_path}")
+            return True
+        except Exception as e:
+            logger.error(f"初始化用户配置失败 username={username}: {e}")
+            return False
+
     def load_user_config(self, username: str) -> Optional[Dict[str, Any]]:
-        """从 config.yaml 加载用户配置，不存在则返回 None"""
+        """从 config.yaml 加载用户配置，不存在则复制管理员兜底配置后再加载"""
         config_path = self.get_user_config_path(username)
-        if not config_path.exists():
+        if not self.ensure_user_config(username):
             return None
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -84,6 +153,7 @@ class UserDataManager:
         try:
             self._ensure_user_dirs(username)
             config_path = self.get_user_config_path(username)
+            self.ensure_user_config(username)
 
             # 读取已有配置，深度合并后写回
             existing: Dict[str, Any] = {}
@@ -108,22 +178,28 @@ class UserDataManager:
             return False
 
     def reset_user_config(self, username: str, keys: Optional[List[str]] = None) -> bool:
-        """重置用户配置。keys 为 None 时删除整个文件，否则只删除指定顶层键"""
+        """重置用户配置。
+
+        keys 为 None 时重新复制整份管理员兜底配置。指定 keys 时，仅把对应顶层键
+        恢复为管理员配置中的默认值；管理员配置不存在该键则从用户配置中移除。
+        """
         config_path = self.get_user_config_path(username)
         try:
             if keys is None:
-                if config_path.exists():
-                    config_path.unlink()
-                return True
+                return self.ensure_user_config(username, overwrite=True)
 
             if not config_path.exists():
-                return True
+                return self.ensure_user_config(username)
 
             with open(config_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
 
+            admin_config = self._load_admin_config()
             for k in keys:
-                data.pop(k, None)
+                if k in admin_config:
+                    data[k] = copy.deepcopy(admin_config[k])
+                else:
+                    data.pop(k, None)
 
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(data, f, default_flow_style=False, allow_unicode=True)

@@ -126,7 +126,7 @@ class LinyuAdapter:
         self._ws_base_url = self._build_ws_base()
 
         # 实时通话管理器（用户拨打AI）
-        self.voice_call_config = VoiceCallConfig.from_linyu_adapter_config(config.adapters_config)
+        self.voice_call_config = VoiceCallConfig.from_linyu_adapter_config(self.linyu_config, nested=True)
         self.voice_call_manager = VoiceCallManager(self, self.voice_call_config)
 
     def _build_http_base(self) -> str:
@@ -498,6 +498,10 @@ class LinyuAdapter:
         image_task = None
         bot_user_id = self._get_bot_user_id(user_id)
 
+        if await self._is_roleplay_mode(bot_user_id):
+            await self._do_text_reply(user_id, text_content)
+            return
+
         image_prompt = self.bot.should_generate_image(text_content, user_id=bot_user_id)
         if image_prompt:
             print(f"🎨 检测到图像生成请求: {image_prompt}")
@@ -523,17 +527,36 @@ class LinyuAdapter:
             bot_user_id = self._get_bot_user_id(user_id)
             session_id = self._get_bot_session_id(user_id)
             proactive_api.record_user_activity("linyu_private", user_id, user_id, text_content)
+            roleplay_mode = await self._is_roleplay_mode(bot_user_id)
             voice_only = self.bot.is_voice_only_mode(bot_user_id)
-            response = await self._stream_reply_by_sentence(
-                user_id=user_id,
-                prompt=text_content,
-                bot_user_id=bot_user_id,
-                session_id=session_id,
-                emit_text=not voice_only,
-            )
+            if roleplay_mode:
+                response = await self._collect_stream_reply(
+                    prompt=text_content,
+                    bot_user_id=bot_user_id,
+                    session_id=session_id,
+                )
+                if response:
+                    await self._send_text_once(user_id, response, is_group=False)
+            else:
+                response = await self._stream_reply_by_sentence(
+                    user_id=user_id,
+                    prompt=text_content,
+                    bot_user_id=bot_user_id,
+                    session_id=session_id,
+                    emit_text=not voice_only,
+                )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, response)
             log_response = response[:200] + "..." if len(response) > 200 else response
             print(f"🤖 Linyu AI回复 -> {user_id}: {log_response}")
+            if self.bot.pop_last_mode_command(bot_user_id, session_id):
+                if roleplay_mode or not voice_only:
+                    return
+                if response:
+                    await self._send_text_once(user_id, response, is_group=False)
+                return
+            if roleplay_mode:
+                return
+
             last_image = self.bot.get_last_generated_image()
 
             await self._deliver_tts_and_text_response(
@@ -557,6 +580,8 @@ class LinyuAdapter:
             await self.send_private_message(user_id, "抱歉，回复失败了...")
 
     async def _handle_image_message(self, user_id: str, msg_id: str, msg_content: Dict[str, Any]):
+        if await self._is_roleplay_mode(self._get_bot_user_id(user_id)):
+            return
         image_segments = [{"type": "image"}]
         if not self.bot.should_recognize_image(image_segments):
             return
@@ -564,6 +589,8 @@ class LinyuAdapter:
         await self._handle_vision_recognition(user_id, msg_id, msg_content)
 
     async def _handle_voice_message(self, user_id: str, msg_id: str, msg_content: Dict[str, Any]):
+        if await self._is_roleplay_mode(self._get_bot_user_id(user_id)):
+            return
         await self._handle_asr_recognition(user_id, msg_id, msg_content)
 
     async def _handle_image_generation(self, user_id: str, prompt: str):
@@ -701,6 +728,11 @@ class LinyuAdapter:
             )
             proactive_api.record_assistant_activity("linyu_private", user_id, user_id, llm_response)
 
+            if self.bot.pop_last_mode_command(bot_user_id, session_id):
+                if voice_only and llm_response:
+                    await self._send_text_once(user_id, llm_response, is_group=False)
+                return
+
             await self._deliver_tts_and_text_response(
                 user_id=user_id,
                 response=llm_response,
@@ -825,15 +857,11 @@ class LinyuAdapter:
         self.bot.register_session_channel(effective_session, "linyu_private")
 
         if not emit_text:
-            final_response = ""
-            async for chunk in self.bot.chat_stream(prompt, user_id=effective_bot_user_id, session_id=effective_session):
-                if chunk:
-                    final_response += chunk
-
-            cleaned_response, _ = extract_tts_tag(final_response)
-            cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
-            cleaned_response, _ = extract_delegate_tag(cleaned_response)
-            return cleaned_response
+            return await self._collect_stream_reply(
+                prompt=prompt,
+                bot_user_id=effective_bot_user_id,
+                session_id=effective_session,
+            )
 
         final_response = ""
         sentence_buffer = ""
@@ -922,6 +950,23 @@ class LinyuAdapter:
 
         return cleaned_response
 
+    async def _collect_stream_reply(
+        self,
+        prompt: str,
+        bot_user_id: str,
+        session_id: str,
+    ) -> str:
+        """完整收集流式回复，不进行自动分句/分段发送。"""
+        final_response = ""
+        async for chunk in self.bot.chat_stream(prompt, user_id=bot_user_id, session_id=session_id):
+            if chunk:
+                final_response += chunk
+
+        cleaned_response, _ = extract_tts_tag(final_response)
+        cleaned_response, _ = extract_gen_img_prompt(cleaned_response)
+        cleaned_response, _ = extract_delegate_tag(cleaned_response)
+        return cleaned_response
+
     async def _deliver_tts_and_text_response(
         self,
         user_id: str,
@@ -956,6 +1001,15 @@ class LinyuAdapter:
     def _get_bot_session_id(self, linyu_user_id: str) -> str:
         """为该 Linyu 对话生成稳定的 Bot 会话 ID。"""
         return f"linyu_private:{str(linyu_user_id)}"
+
+    async def _is_roleplay_mode(self, user_id: str) -> bool:
+        checker = getattr(self.bot, "is_roleplay_mode", None)
+        if checker is None:
+            return False
+        try:
+            return bool(await checker(user_id))
+        except Exception:
+            return False
 
     async def _resolve_tts_audio(self, response: str, user_id: str) -> Optional[bytes]:
         """统一 TTS 合成入口：优先 AI 主动触发，否则走概率触发。"""

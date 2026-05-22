@@ -241,6 +241,10 @@ class QQAdapter:
             return
         
         print(f"📨 私聊消息 {user_id}: {text_content}")
+
+        if await self._is_roleplay_mode(user_id):
+            await self._do_private_reply(user_id, text_content)
+            return
         
         # 任务变量初始化
         image_task = None
@@ -294,6 +298,16 @@ class QQAdapter:
             proactive_api.record_user_activity("qq_private", user_id, user_id, text_content)
             response = await self.bot.chat(text_content, user_id=user_id)
             proactive_api.record_assistant_activity("qq_private", user_id, user_id, response)
+
+            if self.bot.pop_last_mode_command(user_id, user_id):
+                if response:
+                    await self._send_raw_private_message(user_id, response)
+                return
+
+            if await self._is_roleplay_mode(user_id):
+                if response:
+                    await self._send_raw_private_message(user_id, response)
+                return
 
             # 检查是否有主动生成的图片
             last_image = self.bot.get_last_generated_image()
@@ -380,6 +394,10 @@ class QQAdapter:
             return
         
         print(f"📨 群消息 {group_id}/{user_id}: {text_content}")
+
+        if await self._is_roleplay_mode(user_id):
+            await self._do_group_reply(group_id, user_id, text_content)
+            return
         
         # 任务变量初始化
         image_task = None
@@ -435,6 +453,16 @@ class QQAdapter:
             proactive_api.record_user_activity("qq_group", group_id, session_id, text_content)
             response = await self.bot.chat(text_content, user_id=user_id, session_id=session_id)
             proactive_api.record_assistant_activity("qq_group", group_id, session_id, response)
+
+            if self.bot.pop_last_mode_command(user_id, session_id):
+                if response:
+                    await self._send_raw_group_message(group_id, response)
+                return
+
+            if await self._is_roleplay_mode(user_id):
+                if response:
+                    await self._send_raw_group_message(group_id, response)
+                return
 
             # 检查是否有主动生成的图片
             last_image = self.bot.get_last_generated_image()
@@ -1070,6 +1098,14 @@ class QQAdapter:
                 user_identifier,
                 llm_response,
             )
+
+            if self.bot.pop_last_mode_command(effective_user_id, user_identifier):
+                if llm_response:
+                    if is_group:
+                        await self._send_raw_group_message(target_id, llm_response)
+                    else:
+                        await self._send_raw_private_message(target_id, llm_response)
+                return
              
             # 语音合成（如果有）
             audio_data = await self._resolve_tts_audio(llm_response, effective_user_id)
@@ -1178,6 +1214,14 @@ class QQAdapter:
                 user_identifier,
                 llm_response,
             )
+
+            if self.bot.pop_last_mode_command(effective_user_id, user_identifier):
+                if llm_response:
+                    if is_group:
+                        await self._send_raw_group_message(target_id, llm_response)
+                    else:
+                        await self._send_raw_private_message(target_id, llm_response)
+                return
 
             # 语音合成（如果有）
             audio_data = await self._resolve_tts_audio(llm_response, effective_user_id)
@@ -1340,6 +1384,15 @@ class QQAdapter:
             except Exception as e:
                 print(f"❌ TTS合成失败: {str(e)}")
                 return None
+
+    async def _is_roleplay_mode(self, user_id: str) -> bool:
+        checker = getattr(self.bot, "is_roleplay_mode", None)
+        if checker is None:
+            return False
+        try:
+            return bool(await checker(user_id))
+        except Exception:
+            return False
 
     async def stop(self):
         """停止适配器"""

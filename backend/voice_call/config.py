@@ -1,6 +1,6 @@
 """Linyu 通话配置。"""
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
@@ -14,8 +14,12 @@ class VoiceCallConfig(BaseModel):
     audio_only: bool = Field(default=True)
 
     @classmethod
-    def from_linyu_adapter_config(cls, adapter_cfg: Dict[str, Any]) -> "VoiceCallConfig":
-        linyu = (adapter_cfg or {}).get("linyu", {}) or {}
+    def from_linyu_adapter_config(
+        cls,
+        adapter_cfg: Optional[Dict[str, Any]],
+        *,
+        nested: bool = False,
+    ) -> "VoiceCallConfig":
+        linyu = (adapter_cfg or {}) if nested else ((adapter_cfg or {}).get("linyu", {}) or {})
         vc = linyu.get("voice_call", {}) or {}
         return cls.model_validate(vc)
-

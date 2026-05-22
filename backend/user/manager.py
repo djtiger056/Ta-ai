@@ -297,6 +297,27 @@ class UserManager:
 
         # 处理 None 值（重置）
         reset_keys = [_KEY_MAP.get(k, k) for k, v in config_data.items() if v is None]
+        is_full_reset_request = (
+            config_data
+            and len(reset_keys) == len(config_data)
+            and {
+                _KEY_MAP.get(k, k)
+                for k in config_data.keys()
+            } >= {
+                'system_prompt',
+                'llm',
+                'tts',
+                'image_generation',
+                'vision',
+                'prompt_enhancer',
+                'emotes',
+                'proactive_chat',
+                'adapters',
+                'preferences',
+            }
+        )
+        if is_full_reset_request:
+            return user_data_manager.reset_user_config(user.username)
 
         if file_data:
             ok = user_data_manager.save_user_config(user.username, file_data)

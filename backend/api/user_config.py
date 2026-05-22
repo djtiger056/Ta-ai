@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from backend.user import user_manager, auth_manager
 from backend.api.deps import get_access_token
+from backend.api.bot_provider import get_bot
 from backend.adapters.linyu_manager import get_linyu_session_manager
 
 
@@ -103,6 +104,10 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
     
     # 返回更新后的配置
     config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
+    try:
+        get_bot().invalidate_user_cache(str(user_info['user_id']))
+    except Exception:
+        pass
     manager = get_linyu_session_manager()
     if manager:
         manager.request_refresh_user(str(user_info['user_id']))
@@ -189,6 +194,11 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="配置重置失败"
         )
+
+    try:
+        get_bot().invalidate_user_cache(str(user_info['user_id']))
+    except Exception:
+        pass
 
     manager = get_linyu_session_manager()
     if manager:

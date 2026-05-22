@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import Any, Dict, Optional
 
 from .config import VoiceCallConfig
@@ -37,6 +38,7 @@ class VoiceCallManager:
         if not isinstance(content, dict):
             return
 
+        content = self._normalize_signal_payload(content)
         signal_type = self._normalize_signal_type(content.get("type"))
         if not signal_type:
             return
@@ -54,6 +56,69 @@ class VoiceCallManager:
             return
         elif signal_type == "answer":
             return
+
+    def _normalize_signal_payload(self, content: Dict[str, Any]) -> Dict[str, Any]:
+        payload = dict(content or {})
+
+        desc = payload.get("desc")
+        if isinstance(desc, dict):
+            if not payload.get("sdp"):
+                payload["sdp"] = desc.get("sdp")
+            if not payload.get("sdpType"):
+                payload["sdpType"] = desc.get("type") or desc.get("sdpType")
+
+        candidate = payload.get("candidate")
+        if isinstance(candidate, dict):
+            payload["candidate"] = candidate.get("candidate")
+            if not payload.get("sdpMid"):
+                payload["sdpMid"] = candidate.get("sdpMid")
+            if not payload.get("sdpMLineIndex"):
+                payload["sdpMLineIndex"] = candidate.get("sdpMLineIndex")
+            if not payload.get("usernameFragment"):
+                payload["usernameFragment"] = candidate.get("usernameFragment")
+
+        from_id = str(payload.get("fromId") or payload.get("from_id") or "").strip()
+        if from_id and not payload.get("fromId"):
+            payload["fromId"] = from_id
+
+        if not payload.get("audioOnly"):
+            if "isOnlyAudio" in payload:
+                payload["audioOnly"] = payload.get("isOnlyAudio")
+            elif "audio_only" in payload:
+                payload["audioOnly"] = payload.get("audio_only")
+
+        if not payload.get("callId"):
+            payload["callId"] = self._derive_call_id(payload)
+
+        return payload
+
+    @staticmethod
+    def _derive_call_id(payload: Dict[str, Any]) -> str:
+        explicit_keys = ("call_id", "roomId", "room_id", "sessionId", "session_id")
+        for key in explicit_keys:
+            value = payload.get(key)
+            if value:
+                return str(value)
+
+        signal_type = str(payload.get("type") or "").strip().lower()
+        from_id = str(payload.get("fromId") or payload.get("from_id") or "").strip()
+        sdp = str(payload.get("sdp") or "").strip()
+        candidate = str(payload.get("candidate") or "").strip()
+
+        if signal_type == "invite" and from_id:
+            return f"invite:{from_id}"
+
+        if signal_type in {"offer", "answer"} and from_id and sdp:
+            digest = hashlib.sha1(sdp.encode("utf-8", errors="ignore")).hexdigest()[:12]
+            return f"sdp:{from_id}:{digest}"
+
+        if signal_type == "candidate" and from_id and candidate:
+            digest = hashlib.sha1(candidate.encode("utf-8", errors="ignore")).hexdigest()[:12]
+            return f"candidate:{from_id}:{digest}"
+
+        if from_id:
+            return f"{signal_type}:{from_id}"
+        return ""
 
     @staticmethod
     def _normalize_signal_type(raw: Any) -> str:
@@ -108,10 +173,7 @@ class VoiceCallManager:
         session.set_state(CallState.CONNECTING)
 
         payload = {
-            "toId": from_id,
-            "fromId": str(self.adapter.user_id or ""),
-            "callId": call_id,
-            "audioOnly": True,
+            "userId": from_id,
         }
         await self.adapter._request_json("POST", "/v1/api/video/accept", json_data=payload)
 
@@ -121,13 +183,13 @@ class VoiceCallManager:
 
         async def _on_local_candidate(candidate_payload: dict):
             payload = {
-                "toId": peer_user_id,
-                "fromId": str(self.adapter.user_id or ""),
-                "callId": call_id,
-                "candidate": candidate_payload.get("candidate"),
-                "sdpMid": candidate_payload.get("sdpMid"),
-                "sdpMLineIndex": candidate_payload.get("sdpMLineIndex"),
-                "usernameFragment": candidate_payload.get("usernameFragment"),
+                "userId": peer_user_id,
+                "candidate": {
+                    "candidate": candidate_payload.get("candidate"),
+                    "sdpMid": candidate_payload.get("sdpMid"),
+                    "sdpMLineIndex": candidate_payload.get("sdpMLineIndex"),
+                    "usernameFragment": candidate_payload.get("usernameFragment"),
+                },
             }
             await self.adapter._request_json("POST", "/v1/api/video/candidate", json_data=payload)
 
@@ -157,12 +219,11 @@ class VoiceCallManager:
             return
 
         payload = {
-            "toId": from_id,
-            "fromId": str(self.adapter.user_id or ""),
-            "callId": call_id,
-            "sdp": answer.get("sdp"),
-            "sdpType": answer.get("type", "answer"),
-            "audioOnly": True,
+            "userId": from_id,
+            "desc": {
+                "sdp": answer.get("sdp"),
+                "type": answer.get("type", "answer"),
+            },
         }
         await self.adapter._request_json("POST", "/v1/api/video/answer", json_data=payload)
         session.set_state(CallState.CONNECTED)

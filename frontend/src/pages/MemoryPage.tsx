@@ -30,7 +30,7 @@ import {
   EyeOutlined,
   ReloadOutlined
 } from '@ant-design/icons'
-import { memoryApi } from '@/services/api'
+import { memoryApi, userConfigApi, UserConfig } from '@/services/api'
 
 const { TabPane } = Tabs
 const { TextArea } = Input
@@ -130,6 +130,7 @@ const EMBEDDING_DEFAULTS: Record<string, Partial<MemoryConfig>> = {
 
 const MemoryPage: React.FC = () => {
   const [configForm] = Form.useForm()
+  const [roleplayMemoryForm] = Form.useForm()
   const [searchForm] = Form.useForm()
   const [addMemoryForm] = Form.useForm()
 
@@ -187,6 +188,8 @@ const MemoryPage: React.FC = () => {
   const [embeddingHistory, setEmbeddingHistory] = useState<Record<string, Partial<MemoryConfig>>>({})
   const embeddingSecretRef = useRef<Record<string, string | undefined>>({})
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
+  const [roleplayMemorySaving, setRoleplayMemorySaving] = useState(false)
+  const [userConfig, setUserConfig] = useState<UserConfig | null>(null)
   const savedConfigRef = useRef<MemoryConfig | null>(null)
 
   // 配置标签页
@@ -326,10 +329,37 @@ const MemoryPage: React.FC = () => {
 
   const loadConfig = async () => {
     try {
-      const data = await memoryApi.getMemoryConfig()
+      const [data, userCfg] = await Promise.all([
+        memoryApi.getMemoryConfig(),
+        userConfigApi.getConfig(),
+      ])
       setConfig(data)
+      setUserConfig(userCfg)
       savedConfigRef.current = data
       configForm.setFieldsValue(data)
+      roleplayMemoryForm.setFieldsValue({
+        short_term_max_rounds: 50,
+        short_term_keep_rounds: 50,
+        pending_enabled: true,
+        pending_chunk_rounds: 20,
+        pending_delete_after_summary: true,
+        pending_overlap_messages: 4,
+        mid_term_context_count: 3,
+        summarizer_enabled: true,
+        summarizer_llm: {
+          provider: 'openai',
+          model: '',
+          api_base: '',
+          api_key: '',
+          temperature: 0.2,
+          max_tokens: 1200,
+        },
+        summary_max_length: 500,
+        max_summaries: 10,
+        ...(userCfg.preferences?.roleplay_memory || {}),
+        long_term_enabled: false,
+        legacy_auto_extract_enabled: false,
+      })
       if (Array.isArray(data?.external_memory_prefer_topics)) {
         setExternalContextTopics(data.external_memory_prefer_topics.join(','))
       }
@@ -431,6 +461,32 @@ const MemoryPage: React.FC = () => {
       })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSaveRoleplayMemoryConfig = async () => {
+    try {
+      setRoleplayMemorySaving(true)
+      const values = await roleplayMemoryForm.validateFields()
+      const nextPreferences = {
+        ...(userConfig?.preferences || {}),
+        roleplay_memory: {
+          ...values,
+          short_term_enabled: true,
+          mid_term_enabled: true,
+          long_term_enabled: false,
+          legacy_auto_extract_enabled: false,
+        },
+      }
+      const updated = await userConfigApi.updateConfig({ preferences: nextPreferences })
+      setUserConfig(updated)
+      message.success('情景演绎记忆配置已保存')
+    } catch (error: any) {
+      const detail = error?.response?.data?.detail || error?.message || '未知错误'
+      message.error(`保存情景记忆配置失败: ${detail}`)
+      console.error(error)
+    } finally {
+      setRoleplayMemorySaving(false)
     }
   }
 
@@ -1562,6 +1618,142 @@ const MemoryPage: React.FC = () => {
               </Card>
             </Col>
           </Row>
+
+          <Card
+            title="情景演绎记忆配置"
+            style={{ marginTop: 16 }}
+            extra={
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                loading={roleplayMemorySaving}
+                onClick={handleSaveRoleplayMemoryConfig}
+              >
+                保存情景记忆配置
+              </Button>
+            }
+          >
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="情景演绎模式使用独立记忆"
+              description="该配置只影响当前用户的情景演绎模式；长期记忆会被后端强制关闭，只保留短期记忆、待处理区和中期摘要。"
+            />
+            <Form
+              form={roleplayMemoryForm}
+              layout="vertical"
+              initialValues={{
+                short_term_max_rounds: 50,
+                short_term_keep_rounds: 50,
+                pending_enabled: true,
+                pending_chunk_rounds: 20,
+                pending_delete_after_summary: true,
+                pending_overlap_messages: 4,
+                mid_term_context_count: 3,
+                summarizer_enabled: true,
+                summarizer_llm: {
+                  provider: 'openai',
+                  model: '',
+                  api_base: '',
+                  api_key: '',
+                  temperature: 0.2,
+                  max_tokens: 1200,
+                },
+                summary_max_length: 500,
+                max_summaries: 10,
+              }}
+            >
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Form.Item label="短期最大轮次" name="short_term_max_rounds">
+                    <InputNumber min={2} max={500} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="短期保留轮次" name="short_term_keep_rounds">
+                    <InputNumber min={2} max={500} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="注入摘要条数" name="mid_term_context_count">
+                    <InputNumber min={0} max={20} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="最大摘要数量" name="max_summaries">
+                    <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Form.Item label="启用待处理区" name="pending_enabled" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="摘要后删除原文" name="pending_delete_after_summary" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="待处理触发轮次" name="pending_chunk_rounds">
+                    <InputNumber min={1} max={200} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="摘要重叠消息数" name="pending_overlap_messages">
+                    <InputNumber min={0} max={20} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={6}>
+                  <Form.Item label="启用摘要LLM" name="summarizer_enabled" valuePropName="checked">
+                    <Switch />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="摘要最大长度" name="summary_max_length">
+                    <InputNumber min={100} max={4000} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="摘要模型提供商" name={['summarizer_llm', 'provider']}>
+                    <Input placeholder="openai" />
+                  </Form.Item>
+                </Col>
+                <Col span={6}>
+                  <Form.Item label="摘要模型" name={['summarizer_llm', 'model']}>
+                    <Input placeholder="使用全局默认或填写模型名" />
+                  </Form.Item>
+                </Col>
+              </Row>
+              <Row gutter={16}>
+                <Col span={8}>
+                  <Form.Item label="摘要 API Base" name={['summarizer_llm', 'api_base']}>
+                    <Input allowClear />
+                  </Form.Item>
+                </Col>
+                <Col span={8}>
+                  <Form.Item label="摘要 API Key" name={['summarizer_llm', 'api_key']}>
+                    <Input.Password allowClear />
+                  </Form.Item>
+                </Col>
+                <Col span={4}>
+                  <Form.Item label="温度" name={['summarizer_llm', 'temperature']}>
+                    <InputNumber min={0} max={2} step={0.1} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+                <Col span={4}>
+                  <Form.Item label="最大Token" name={['summarizer_llm', 'max_tokens']}>
+                    <InputNumber min={200} max={8000} style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Form>
+          </Card>
         </TabPane>
         
         {/* 短期记忆标签页 */}

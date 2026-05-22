@@ -29,6 +29,23 @@ from .history_manager import HistoryManager
 from .user_cache import UserResourceCache
 
 
+DEFAULT_ROLEPLAY_EXIT_SUMMARY_PROMPT = """你是 AI 伴侣模式的记忆整理助手。
+请只基于输入内容，写一段适合存入 AI 伴侣短期记忆的摘要。
+要求：
+1. 不续写剧情，不扮演角色，不编造输入外的信息。
+2. 保留用户在情景演绎中体现出的偏好、关系动态、重要剧情节点、未完成线索。
+3. 用自然中文写成一段，避免列表过长。
+
+本次情景演绎中期摘要：
+{summaries}
+
+本次情景演绎保留的对话原文：
+{conversation}
+
+当前时间：{current_time}
+"""
+
+
 class Bot:
     """Bot 核心类，处理对话与多模态协作，支持多用户配置"""
     
@@ -56,6 +73,9 @@ class Bot:
         self._user_image_gen_managers = self._user_cache._user_image_gen_managers
         self._user_image_gen_signatures = self._user_cache._user_image_gen_signatures
         self._session_last_companion_hint_turn: Dict[str, int] = {}
+        self._roleplay_memory_managers: Dict[str, MemoryManager] = {}
+        self._roleplay_memory_signatures: Dict[str, str] = {}
+        self._last_mode_command: Optional[Dict[str, Any]] = None
 
         # 存储最近生成的图片（用于API返回）
         self._last_generated_image: Optional[Dict[str, Any]] = None
@@ -601,6 +621,522 @@ class Bot:
         """获取用户的系统提示词，委托到 UserResourceCache。"""
         return self._user_cache.get_system_prompt(user_id)
 
+    def invalidate_user_cache(self, user_id: str) -> None:
+        """清理用户级资源缓存。"""
+        uid = str(user_id)
+        self._user_cache.invalidate_user(uid)
+        self._roleplay_memory_managers.pop(uid, None)
+        self._roleplay_memory_signatures.pop(uid, None)
+
+    def pop_last_mode_command(self, user_id: Optional[str] = None, session_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """取出本轮模式控制命令标记，用于适配器跳过多模态后处理。"""
+        marker = self._last_mode_command
+        if not marker:
+            return None
+        if user_id is not None and str(marker.get("user_id")) != str(user_id):
+            return None
+        if session_id is not None and str(marker.get("session_id")) != str(session_id):
+            return None
+        self._last_mode_command = None
+        return marker
+
+    def get_default_roleplay_exit_summary_prompt(self) -> str:
+        return DEFAULT_ROLEPLAY_EXIT_SUMMARY_PROMPT
+
+    async def _resolve_config_user(self, user_id: str):
+        try:
+            return await self._user_cache.resolve_user(user_id)
+        except Exception as e:
+            self.logger.warning(f"解析用户失败 user_id={user_id}: {e}")
+            return None
+
+    async def _get_user_preferences_for_update(self, user_id: str) -> Optional[Dict[str, Any]]:
+        user = await self._resolve_config_user(user_id)
+        if not user:
+            return None
+        try:
+            cfg = await user_manager.get_user_config_dict(user.id)
+        except Exception as e:
+            self.logger.warning(f"读取用户配置失败 user_id={user_id}: {e}")
+            return None
+        prefs = cfg.get("preferences") if isinstance(cfg, dict) else {}
+        return dict(prefs or {})
+
+    async def _update_user_preferences(self, user_id: str, preferences: Dict[str, Any]) -> bool:
+        user = await self._resolve_config_user(user_id)
+        if not user:
+            return False
+        success = await user_manager.update_user_config(user.id, {"preferences": preferences})
+        if success:
+            self.invalidate_user_cache(str(user_id))
+            try:
+                from backend.adapters.linyu_manager import get_linyu_session_manager
+                manager = get_linyu_session_manager()
+                if manager:
+                    manager.request_refresh_user(str(user_id))
+            except Exception:
+                pass
+        return success
+
+    async def _get_roleplay_message_index(self, memory_manager: Optional[MemoryManager], user_id: str, session_id: str) -> int:
+        if not memory_manager:
+            return 0
+        try:
+            state = await memory_manager._get_session_state(session_id, user_id)
+            return int(state.get("message_count", 0) or 0)
+        except Exception:
+            return 0
+
+    def _session_episode_key(self, session_id: str) -> str:
+        return str(session_id or "default")
+
+    async def _set_roleplay_episode_start(self, user_id: str, session_id: str, preferences: Dict[str, Any]) -> Dict[str, Any]:
+        roleplay_user_id = self._roleplay_user_id(user_id)
+        roleplay_session_id = self._roleplay_session_id(session_id)
+        memory_manager = await self._get_roleplay_memory_manager(user_id)
+        start_index = await self._get_roleplay_message_index(memory_manager, roleplay_user_id, roleplay_session_id)
+        episodes = dict(preferences.get("roleplay_active_episodes") or {})
+        episodes[self._session_episode_key(session_id)] = {
+            "started_at": get_now().isoformat(),
+            "start_message_index": start_index,
+        }
+        preferences["roleplay_active_episodes"] = episodes
+        return preferences
+
+    def _get_roleplay_exit_summary_prompt(self, preferences: Dict[str, Any]) -> str:
+        prompt = str((preferences or {}).get("roleplay_exit_summary_prompt") or "").strip()
+        return prompt or DEFAULT_ROLEPLAY_EXIT_SUMMARY_PROMPT
+
+    def _render_roleplay_exit_summary_prompt(
+        self,
+        prompt: str,
+        conversation: str,
+        summaries: str,
+    ) -> str:
+        values = {
+            "conversation": conversation or "（无）",
+            "summaries": summaries or "（无）",
+            "current_time": get_now().isoformat(),
+        }
+        rendered = prompt
+        used = False
+        for key, value in values.items():
+            token = "{" + key + "}"
+            if token in rendered:
+                rendered = rendered.replace(token, value)
+                used = True
+        if not used:
+            rendered += (
+                "\n\n本次情景演绎中期摘要：\n"
+                + values["summaries"]
+                + "\n\n本次情景演绎保留的对话原文：\n"
+                + values["conversation"]
+                + "\n\n当前时间："
+                + values["current_time"]
+            )
+        return rendered
+
+    def _message_index_from_memory(self, item: Dict[str, Any]) -> int:
+        meta = item.get("metadata") or item.get("meta_data") or {}
+        try:
+            return int(meta.get("message_index") or 0)
+        except Exception:
+            return 0
+
+    async def _get_roleplay_raw_memories_since(
+        self,
+        memory_manager: MemoryManager,
+        user_id: str,
+        session_id: str,
+        start_index: int,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        if not memory_manager or memory_manager.async_session is None:
+            return items
+        try:
+            from ..memory.models import MemoryItemDB
+            from sqlalchemy.future import select
+
+            async with memory_manager.async_session() as session:
+                stmt = select(MemoryItemDB).where(
+                    MemoryItemDB.user_id == user_id,
+                    MemoryItemDB.session_id == session_id,
+                    MemoryItemDB.memory_type.in_(["short_term", "pending", "pending_processing", "archived"]),
+                ).order_by(MemoryItemDB.id.asc()).limit(limit)
+                result = await session.execute(stmt)
+                rows = result.scalars().all()
+                for row in rows:
+                    item = row.to_dict()
+                    try:
+                        item["message"] = json.loads(item.get("content") or "{}")
+                    except Exception:
+                        item["message"] = {"role": "unknown", "content": item.get("content") or ""}
+                    if self._message_index_from_memory(item) > int(start_index or 0):
+                        items.append(item)
+        except Exception as e:
+            print(f"读取情景演绎保留原文失败: {e}")
+        return items
+
+    async def _get_roleplay_summaries_since(
+        self,
+        memory_manager: MemoryManager,
+        user_id: str,
+        session_id: str,
+        start_index: int,
+    ) -> List[Dict[str, Any]]:
+        try:
+            summaries = await memory_manager.get_mid_term_summaries(user_id=user_id, session_id=session_id, limit=100)
+        except Exception as e:
+            print(f"读取情景演绎摘要失败: {e}")
+            return []
+
+        kept = []
+        for item in summaries or []:
+            rng = str(item.get("conversation_range") or "")
+            end = 0
+            if "-" in rng:
+                try:
+                    end = int(rng.split("-")[-1])
+                except Exception:
+                    end = 0
+            if not start_index or end == 0 or end > int(start_index or 0):
+                kept.append(item)
+        return list(reversed(kept))
+
+    def _format_roleplay_conversation(self, memories: List[Dict[str, Any]]) -> str:
+        lines = []
+        for item in memories:
+            msg = item.get("message") or {}
+            role = str(msg.get("role") or "unknown")
+            content = str(msg.get("content") or "").strip()
+            if not content:
+                continue
+            label = "用户" if role == "user" else "AI" if role == "assistant" else role
+            lines.append(f"{label}: {content}")
+        return "\n".join(lines).strip()
+
+    def _format_roleplay_summaries(self, summaries: List[Dict[str, Any]]) -> str:
+        lines = []
+        for item in summaries:
+            text = str(item.get("summary") or "").strip()
+            if text:
+                lines.append(f"- {text}")
+        return "\n".join(lines).strip()
+
+    async def _write_roleplay_exit_summary_to_companion_memory(
+        self,
+        user_id: str,
+        session_id: str,
+        summary: str,
+    ) -> bool:
+        if not summary.strip():
+            return False
+        if not self.memory_manager or not await self._ensure_memory_manager_initialized():
+            return False
+        try:
+            from ..memory.models import ConversationMessage
+            content = "【情景演绎结束摘要】" + summary.strip()
+            ok = await self.memory_manager.add_short_term_memory(
+                user_id=user_id,
+                session_id=session_id,
+                message=ConversationMessage(role="assistant", content=content, timestamp=get_now()),
+            )
+            if ok:
+                history = self._get_session_history(session_id, user_id)
+                history.append({"role": "assistant", "content": content, "timestamp": get_now().isoformat()})
+                self._trim_conversation_history(session_id)
+            return bool(ok)
+        except Exception as e:
+            print(f"写入情景结束摘要到伴侣记忆失败: {e}")
+            return False
+
+    async def _summarize_roleplay_episode_to_companion_memory(
+        self,
+        user_id: str,
+        session_id: str,
+        preferences: Dict[str, Any],
+    ) -> bool:
+        roleplay_user_id = self._roleplay_user_id(user_id)
+        roleplay_session_id = self._roleplay_session_id(session_id)
+        episode = (preferences.get("roleplay_active_episodes") or {}).get(self._session_episode_key(session_id)) or {}
+        try:
+            start_index = int(episode.get("start_message_index") or 0)
+        except Exception:
+            start_index = 0
+
+        memory_manager = await self._get_roleplay_memory_manager(user_id)
+        if not memory_manager:
+            return False
+
+        try:
+            await memory_manager.summarize_pending_now(
+                user_id=roleplay_user_id,
+                session_id=roleplay_session_id,
+                force=True,
+            )
+        except Exception as e:
+            print(f"强制摘要情景待处理区失败: {e}")
+
+        raw_memories = await self._get_roleplay_raw_memories_since(
+            memory_manager=memory_manager,
+            user_id=roleplay_user_id,
+            session_id=roleplay_session_id,
+            start_index=start_index,
+        )
+        mid_summaries = await self._get_roleplay_summaries_since(
+            memory_manager=memory_manager,
+            user_id=roleplay_user_id,
+            session_id=roleplay_session_id,
+            start_index=start_index,
+        )
+        conversation_text = self._format_roleplay_conversation(raw_memories)
+        summaries_text = self._format_roleplay_summaries(mid_summaries)
+        if not conversation_text and not summaries_text:
+            return False
+
+        prompt = self._render_roleplay_exit_summary_prompt(
+            prompt=self._get_roleplay_exit_summary_prompt(preferences),
+            conversation=conversation_text,
+            summaries=summaries_text,
+        )
+        provider = self._get_user_llm_provider(user_id)
+        summary = await provider.chat([
+            {"role": "system", "content": "你负责把情景演绎内容整理成 AI 伴侣模式可用的短期记忆。"},
+            {"role": "user", "content": prompt},
+        ])
+        return await self._write_roleplay_exit_summary_to_companion_memory(user_id, session_id, summary)
+
+    async def _handle_mode_switch_command(self, message: str, user_id: str, session_id: str) -> Optional[str]:
+        command = (message or "").strip()
+        if command not in {"/情景", "/伴侣"}:
+            return None
+
+        self._last_tts_forced_text = None
+        self._last_generated_image = None
+        preferences = await self._get_user_preferences_for_update(user_id)
+        if preferences is None:
+            self._last_mode_command = {"user_id": str(user_id), "session_id": str(session_id), "command": command, "ok": False}
+            return "模式切换失败：没有找到当前用户配置。"
+
+        current_mode = str(preferences.get("chat_mode", "companion") or "companion").strip().lower()
+        if command == "/情景":
+            preferences["chat_mode"] = "roleplay"
+            preferences = await self._set_roleplay_episode_start(user_id, session_id, preferences)
+            ok = await self._update_user_preferences(user_id, preferences)
+            self._last_mode_command = {"user_id": str(user_id), "session_id": str(session_id), "command": command, "mode": "roleplay", "ok": ok}
+            if not ok:
+                return "模式切换失败：用户配置写入失败。"
+            return "已切换到情景演绎模式。"
+
+        wrote_summary = False
+        if current_mode == "roleplay":
+            wrote_summary = await self._summarize_roleplay_episode_to_companion_memory(user_id, session_id, preferences)
+
+        episodes = dict(preferences.get("roleplay_active_episodes") or {})
+        episodes.pop(self._session_episode_key(session_id), None)
+        preferences["roleplay_active_episodes"] = episodes
+        preferences["chat_mode"] = "companion"
+        ok = await self._update_user_preferences(user_id, preferences)
+        self._last_mode_command = {
+            "user_id": str(user_id),
+            "session_id": str(session_id),
+            "command": command,
+            "mode": "companion",
+            "ok": ok,
+            "summary_written": wrote_summary,
+        }
+        if not ok:
+            return "模式切换失败：用户配置写入失败。"
+        if current_mode == "roleplay" and wrote_summary:
+            return "已切换到 AI 伴侣模式，并整理了本次情景演绎记忆。"
+        return "已切换到 AI 伴侣模式。"
+
+    async def is_roleplay_mode(self, user_id: str) -> bool:
+        """判断用户当前是否处于情景演绎模式。"""
+        await self._get_user_config(user_id)
+        return self._user_cache.get_chat_mode(user_id) == "roleplay"
+
+    def _roleplay_user_id(self, user_id: str) -> str:
+        return f"{user_id}::roleplay"
+
+    def _roleplay_session_id(self, session_id: str) -> str:
+        return f"roleplay::{session_id}"
+
+    def _build_roleplay_memory_config(self, user_id: str) -> MemoryConfig:
+        """构建情景演绎专用记忆配置，强制关闭长期记忆。"""
+        base = config.memory_config.model_dump()
+        overrides = self._user_cache.get_roleplay_memory_config(user_id)
+        if isinstance(overrides, dict):
+            base = self._deep_merge_config(base, overrides)
+
+        forced = {
+            "short_term_enabled": True,
+            "mid_term_enabled": True,
+            "long_term_enabled": False,
+            "legacy_auto_extract_enabled": False,
+            "max_long_term_memories": 0,
+        }
+        base.update(forced)
+        return MemoryConfig(**base)
+
+    async def _get_roleplay_memory_manager(self, user_id: str) -> Optional[MemoryManager]:
+        """获取情景演绎专用 MemoryManager。"""
+        try:
+            memory_config = self._build_roleplay_memory_config(user_id)
+            signature = json.dumps(memory_config.model_dump(), sort_keys=True, ensure_ascii=False)
+            manager = self._roleplay_memory_managers.get(user_id)
+            if manager is None or self._roleplay_memory_signatures.get(user_id) != signature:
+                manager = MemoryManager(memory_config)
+                await manager.initialize()
+                self._roleplay_memory_managers[user_id] = manager
+                self._roleplay_memory_signatures[user_id] = signature
+            return manager
+        except Exception as e:
+            print(f"情景演绎记忆管理器初始化失败: {e}")
+            return None
+
+    async def _chat_roleplay(self, message: str, user_id: str, session_id: str) -> str:
+        """情景演绎模式：纯文本、独立提示词、独立短/中期记忆、无长期记忆。"""
+        self._last_tts_forced_text = None
+        self._last_generated_image = None
+
+        provider = self._get_user_llm_provider(user_id)
+        roleplay_user_id = self._roleplay_user_id(user_id)
+        roleplay_session_id = self._roleplay_session_id(session_id)
+        system_prompt = self._user_cache.get_roleplay_prompt(user_id)
+
+        memory_manager = await self._get_roleplay_memory_manager(user_id)
+        history: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+        if memory_manager:
+            try:
+                restored = await memory_manager.get_short_term_memories(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    limit=max(2, memory_manager.config.short_term_max_rounds * 2),
+                )
+                for mem in restored:
+                    msg = mem.get("message") or {}
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if role in {"user", "assistant"} and content:
+                        history.append({"role": role, "content": content})
+            except Exception as e:
+                print(f"情景演绎短期记忆恢复失败: {e}")
+
+            try:
+                summaries = await memory_manager.get_mid_term_summaries(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    limit=memory_manager.config.mid_term_context_count,
+                )
+                summary_lines = [
+                    str(item.get("summary") or "").strip()
+                    for item in reversed(summaries or [])
+                    if str(item.get("summary") or "").strip()
+                ]
+                if summary_lines:
+                    history[0]["content"] += (
+                        "\n\n以下是这段情景演绎的中期回忆摘要，只用于保持剧情连续，不要逐条复述：\n"
+                        + "\n".join(f"- {line}" for line in summary_lines)
+                    )
+            except Exception as e:
+                print(f"情景演绎中期记忆注入失败: {e}")
+
+        history.append({"role": "user", "content": message})
+        response = await provider.chat(self._to_llm_messages(history))
+
+        if memory_manager:
+            try:
+                from ..memory.models import ConversationMessage
+                await memory_manager.batch_add_short_term_memories(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    messages=[
+                        ConversationMessage(role="user", content=self._sanitize_for_memory(message), timestamp=get_now()),
+                        ConversationMessage(role="assistant", content=self._sanitize_for_memory(response), timestamp=get_now()),
+                    ],
+                )
+            except Exception as e:
+                print(f"情景演绎写入记忆失败: {e}")
+
+        return response
+
+    async def _chat_roleplay_stream(
+        self,
+        message: str,
+        user_id: str,
+        session_id: str,
+    ) -> AsyncGenerator[str, None]:
+        """情景演绎模式流式回复。"""
+        self._last_tts_forced_text = None
+        self._last_generated_image = None
+
+        provider = self._get_user_llm_provider(user_id)
+        roleplay_user_id = self._roleplay_user_id(user_id)
+        roleplay_session_id = self._roleplay_session_id(session_id)
+        system_prompt = self._user_cache.get_roleplay_prompt(user_id)
+
+        memory_manager = await self._get_roleplay_memory_manager(user_id)
+        history: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
+
+        if memory_manager:
+            try:
+                restored = await memory_manager.get_short_term_memories(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    limit=max(2, memory_manager.config.short_term_max_rounds * 2),
+                )
+                for mem in restored:
+                    msg = mem.get("message") or {}
+                    role = msg.get("role")
+                    content = msg.get("content")
+                    if role in {"user", "assistant"} and content:
+                        history.append({"role": role, "content": content})
+            except Exception as e:
+                print(f"情景演绎短期记忆恢复失败: {e}")
+
+            try:
+                summaries = await memory_manager.get_mid_term_summaries(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    limit=memory_manager.config.mid_term_context_count,
+                )
+                summary_lines = [
+                    str(item.get("summary") or "").strip()
+                    for item in reversed(summaries or [])
+                    if str(item.get("summary") or "").strip()
+                ]
+                if summary_lines:
+                    history[0]["content"] += (
+                        "\n\n以下是这段情景演绎的中期回忆摘要，只用于保持剧情连续，不要逐条复述：\n"
+                        + "\n".join(f"- {line}" for line in summary_lines)
+                    )
+            except Exception as e:
+                print(f"情景演绎中期记忆注入失败: {e}")
+
+        history.append({"role": "user", "content": message})
+
+        full_response = ""
+        async for chunk in provider.chat_stream(self._to_llm_messages(history)):
+            full_response += chunk
+            yield chunk
+
+        if memory_manager:
+            try:
+                from ..memory.models import ConversationMessage
+                await memory_manager.batch_add_short_term_memories(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    messages=[
+                        ConversationMessage(role="user", content=self._sanitize_for_memory(message), timestamp=get_now()),
+                        ConversationMessage(role="assistant", content=self._sanitize_for_memory(full_response), timestamp=get_now()),
+                    ],
+                )
+            except Exception as e:
+                print(f"情景演绎写入记忆失败: {e}")
+
     async def chat(self, message: str, user_id: str = "default", session_id: Optional[str] = None) -> str:
         """发送消息并获取回复"""
         try:
@@ -612,6 +1148,13 @@ class Bot:
             # 确保全局配置热更新（但真正调用用用户 provider）
             self._refresh_provider()
             provider = self._get_user_llm_provider(user_id)
+
+            mode_command_response = await self._handle_mode_switch_command(message, user_id, session_id)
+            if mode_command_response is not None:
+                return mode_command_response
+
+            if self._user_cache.get_chat_mode(user_id) == "roleplay":
+                return await self._chat_roleplay(message, user_id, session_id)
 
             # 检测待办事项意图
             reminder_confirmation = await self._check_reminder_intent(message, user_id, session_id)
@@ -722,6 +1265,26 @@ class Bot:
             self._refresh_provider()
             provider = self._get_user_llm_provider(user_id)
             mark("provider_ready")
+
+            mode_command_response = await self._handle_mode_switch_command(message, user_id, session_id)
+            if mode_command_response is not None:
+                yield mode_command_response
+                mark("mode_command_done")
+                print(
+                    f"[Latency][bot.chat_stream][mode_command] user_id={user_id} session_id={session_id} "
+                    f"stages_ms={json.dumps(stage_marks, ensure_ascii=False)}"
+                )
+                return
+
+            if self._user_cache.get_chat_mode(user_id) == "roleplay":
+                async for chunk in self._chat_roleplay_stream(message, user_id, session_id):
+                    yield chunk
+                mark("roleplay_stream_done")
+                print(
+                    f"[Latency][bot.chat_stream][roleplay] user_id={user_id} session_id={session_id} "
+                    f"stages_ms={json.dumps(stage_marks, ensure_ascii=False)}"
+                )
+                return
 
             # 恢复最近的对话历史作为短期上下文
             await self._load_history_from_memory(user_id, session_id)
@@ -1069,15 +1632,24 @@ class Bot:
             # 创建待办事项检测器
             from ..memory.reminder_detector import ReminderDetector
             timezone = reminder_config.get("timezone", "Asia/Shanghai")
+            llm_fallback_enabled = bool(reminder_config.get("llm_fallback_enabled", False))
             detector = None
             try:
-                detector = ReminderDetector(self.provider, timezone)
+                detector = ReminderDetector(
+                    self.provider,
+                    timezone,
+                    enable_llm_fallback=llm_fallback_enabled,
+                )
                 print(f"[Bot] 待办事项检测器创建成功，时区: {timezone}")
             except Exception as e:
                 print(f"[Bot] 创建待办事项检测器失败（时区问题）: {e}")
                 # 使用本地时间
                 try:
-                    detector = ReminderDetector(self.provider, None)
+                    detector = ReminderDetector(
+                        self.provider,
+                        None,
+                        enable_llm_fallback=llm_fallback_enabled,
+                    )
                     print(f"[Bot] 使用本地时间创建检测器成功")
                 except Exception as e2:
                     print(f"[Bot] 创建本地时间检测器也失败: {e2}")

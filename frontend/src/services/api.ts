@@ -703,6 +703,26 @@ export const promptApi = {
     const response = await api.get('/prompt/rules/default')
     return response.data.content
   },
+
+  // ── 情景演绎提示词 ───────────────────────────────────────────────
+  getRoleplayPrompt: async (): Promise<{ content: string; is_custom: boolean }> => {
+    const response = await api.get('/prompt/roleplay')
+    return response.data
+  },
+  updateRoleplayPrompt: async (content: string): Promise<void> => {
+    await api.put('/prompt/roleplay', { content, source: 'user' })
+  },
+  resetRoleplayPrompt: async (): Promise<void> => {
+    await api.delete('/prompt/roleplay')
+  },
+  getDefaultRoleplayPrompt: async (): Promise<string> => {
+    const response = await api.get('/prompt/roleplay/default')
+    return response.data.content
+  },
+  getDefaultRoleplayExitSummaryPrompt: async (): Promise<string> => {
+    const response = await api.get('/prompt/roleplay/exit-summary/default')
+    return response.data.content
+  },
 }
 
 export const promptEnhancerApi = {
@@ -879,7 +899,13 @@ export interface UserConfig {
   proactive_chat?: Record<string, any>
   adapters?: Record<string, any>
   agent_delegate?: Record<string, any>
-  preferences?: Record<string, any>
+  preferences?: {
+    chat_mode?: 'companion' | 'roleplay'
+    roleplay_memory?: Record<string, any>
+    roleplay_exit_summary_prompt?: string
+    roleplay_active_episodes?: Record<string, { started_at: string; start_message_index?: number }>
+    [key: string]: any
+  }
 }
 
 export const userConfigApi = {
