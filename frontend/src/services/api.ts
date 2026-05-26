@@ -653,7 +653,15 @@ export const memoryApi = {
   // 获取用户ID列表
   getMemoryUsers: async (): Promise<{
     user_ids: string[]
-    user_info?: { user_id: string; display_name: string; selector_key?: string; channel?: string }[]
+    user_info?: {
+      user_id: string
+      display_name: string
+      selector_key?: string
+      channel?: string
+      default_session_id?: string
+      remote_user_id?: string
+      project_user_id?: string
+    }[]
   }> => {
     try {
       const response = await api.get('/memory/users')

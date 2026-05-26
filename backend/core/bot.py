@@ -1031,12 +1031,13 @@ class Bot:
             print(f"情景演绎记忆管理器初始化失败: {e}")
             return None
 
-    async def _chat_roleplay(self, message: str, user_id: str, session_id: str) -> str:
-        """情景演绎模式：纯文本、独立提示词、独立短/中期记忆、无长期记忆。"""
-        self._last_tts_forced_text = None
-        self._last_generated_image = None
-
-        provider = self._get_user_llm_provider(user_id)
+    async def _build_roleplay_history(
+        self,
+        user_id: str,
+        session_id: str,
+        message: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[MemoryManager], str, str]:
+        """构建情景演绎 LLM 上下文，只包含情景提示词、短期记忆和中期摘要。"""
         roleplay_user_id = self._roleplay_user_id(user_id)
         roleplay_session_id = self._roleplay_session_id(session_id)
         system_prompt = self._user_cache.get_roleplay_prompt(user_id)
@@ -1079,7 +1080,22 @@ class Bot:
             except Exception as e:
                 print(f"情景演绎中期记忆注入失败: {e}")
 
-        history.append({"role": "user", "content": message})
+        if message is not None:
+            history.append({"role": "user", "content": message})
+
+        return history, memory_manager, roleplay_user_id, roleplay_session_id
+
+    async def _chat_roleplay(self, message: str, user_id: str, session_id: str) -> str:
+        """情景演绎模式：纯文本、独立提示词、独立短/中期记忆、无长期记忆。"""
+        self._last_tts_forced_text = None
+        self._last_generated_image = None
+
+        provider = self._get_user_llm_provider(user_id)
+        history, memory_manager, roleplay_user_id, roleplay_session_id = await self._build_roleplay_history(
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+        )
         response = await provider.chat(self._to_llm_messages(history))
 
         if memory_manager:
@@ -1098,6 +1114,31 @@ class Bot:
 
         return response
 
+    async def _generate_roleplay_proactive_reply(self, user_id: str, session_id: str) -> str:
+        """情景演绎模式下的主动消息不注入作息表/MCP/伴侣模式提示。"""
+        self._last_tts_forced_text = None
+        self._last_generated_image = None
+
+        provider = self._get_user_llm_provider(user_id)
+        history, memory_manager, roleplay_user_id, roleplay_session_id = await self._build_roleplay_history(
+            user_id=user_id,
+            session_id=session_id,
+        )
+        response = await provider.chat(self._to_llm_messages(history))
+
+        if memory_manager:
+            try:
+                from ..memory.models import ConversationMessage
+                await memory_manager.add_short_term_memory(
+                    user_id=roleplay_user_id,
+                    session_id=roleplay_session_id,
+                    message=ConversationMessage(role="assistant", content=self._sanitize_for_memory(response), timestamp=get_now()),
+                )
+            except Exception as e:
+                print(f"情景演绎主动回复写入记忆失败: {e}")
+
+        return response
+
     async def _chat_roleplay_stream(
         self,
         message: str,
@@ -1109,49 +1150,11 @@ class Bot:
         self._last_generated_image = None
 
         provider = self._get_user_llm_provider(user_id)
-        roleplay_user_id = self._roleplay_user_id(user_id)
-        roleplay_session_id = self._roleplay_session_id(session_id)
-        system_prompt = self._user_cache.get_roleplay_prompt(user_id)
-
-        memory_manager = await self._get_roleplay_memory_manager(user_id)
-        history: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-
-        if memory_manager:
-            try:
-                restored = await memory_manager.get_short_term_memories(
-                    user_id=roleplay_user_id,
-                    session_id=roleplay_session_id,
-                    limit=max(2, memory_manager.config.short_term_max_rounds * 2),
-                )
-                for mem in restored:
-                    msg = mem.get("message") or {}
-                    role = msg.get("role")
-                    content = msg.get("content")
-                    if role in {"user", "assistant"} and content:
-                        history.append({"role": role, "content": content})
-            except Exception as e:
-                print(f"情景演绎短期记忆恢复失败: {e}")
-
-            try:
-                summaries = await memory_manager.get_mid_term_summaries(
-                    user_id=roleplay_user_id,
-                    session_id=roleplay_session_id,
-                    limit=memory_manager.config.mid_term_context_count,
-                )
-                summary_lines = [
-                    str(item.get("summary") or "").strip()
-                    for item in reversed(summaries or [])
-                    if str(item.get("summary") or "").strip()
-                ]
-                if summary_lines:
-                    history[0]["content"] += (
-                        "\n\n以下是这段情景演绎的中期回忆摘要，只用于保持剧情连续，不要逐条复述：\n"
-                        + "\n".join(f"- {line}" for line in summary_lines)
-                    )
-            except Exception as e:
-                print(f"情景演绎中期记忆注入失败: {e}")
-
-        history.append({"role": "user", "content": message})
+        history, memory_manager, roleplay_user_id, roleplay_session_id = await self._build_roleplay_history(
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+        )
 
         full_response = ""
         async for chunk in provider.chat_stream(self._to_llm_messages(history)):
@@ -1465,6 +1468,10 @@ class Bot:
             self._refresh_provider()
             await self._get_user_config(user_id)
             provider = self._get_user_llm_provider(user_id)
+
+            if self._user_cache.get_chat_mode(user_id) == "roleplay":
+                return await self._generate_roleplay_proactive_reply(user_id, session_id)
+
             await self._load_history_from_memory(user_id, session_id)
             history = self._get_session_history(session_id, user_id)
 

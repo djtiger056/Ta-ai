@@ -104,6 +104,9 @@ interface MemoryUserInfo {
   display_name: string
   selector_key?: string
   channel?: string
+  default_session_id?: string
+  remote_user_id?: string
+  project_user_id?: string
 }
 
 const EMBEDDING_HISTORY_STORAGE_KEY = 'lfbot.memory.embedding.history.v1'
@@ -197,6 +200,9 @@ const MemoryPage: React.FC = () => {
   const [roleplayMemorySaving, setRoleplayMemorySaving] = useState(false)
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null)
   const savedConfigRef = useRef<MemoryConfig | null>(null)
+
+  const selectedMemoryUser = memoryUserOptions.find((info) => info.user_id === selectedUserId)
+  const selectedSessionId = selectedMemoryUser?.default_session_id || selectedUserId
 
   // 配置标签页
   useEffect(() => {
@@ -515,7 +521,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const memories = await memoryApi.getShortTermMemories(selectedUserId, selectedUserId, 20)
+      const memories = await memoryApi.getShortTermMemories(selectedUserId, selectedSessionId, 20)
       setShortTermMemories(memories || [])
     } catch (error) {
       console.error('加载短期记忆失败:', error)
@@ -530,7 +536,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const memories = await memoryApi.getPendingMemories(selectedUserId, selectedUserId, 200)
+      const memories = await memoryApi.getPendingMemories(selectedUserId, selectedSessionId, 200)
       setPendingMemories(memories || [])
     } catch (error) {
       console.error('加载待处理区失败:', error)
@@ -545,7 +551,7 @@ const MemoryPage: React.FC = () => {
     }
     try {
       setLoading(true)
-      const result = await memoryApi.summarizePendingMemories(selectedUserId, selectedUserId)
+      const result = await memoryApi.summarizePendingMemories(selectedUserId, selectedSessionId)
       if (result?.ok) {
         if (result?.processed) {
           const processedBatches = Number(result?.processed_batches || 0)
@@ -591,7 +597,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const summaries = await memoryApi.getMidTermMemories(selectedUserId, undefined, 50)
+      const summaries = await memoryApi.getMidTermMemories(selectedUserId, selectedSessionId, 50)
       setMidTermMemories(summaries || [])
     } catch (error) {
       console.error('加载中期记忆失败:', error)
@@ -772,7 +778,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      await memoryApi.clearMemories(selectedUserId)
+      await memoryApi.clearMemories(selectedUserId, selectedSessionId)
       message.success('记忆清除成功')
       setShortTermMemories([])
       setPendingMemories([])

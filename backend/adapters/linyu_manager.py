@@ -132,6 +132,10 @@ class LinyuSessionManager:
             if session_id and session_id == owner_id:
                 return adapter
 
+        global_adapter = dict(adapters).get("global")
+        if global_adapter:
+            return global_adapter
+
         return None
 
     def get_status_snapshot(self) -> Dict[str, Dict[str, Any]]:
@@ -195,6 +199,12 @@ class LinyuSessionManager:
     async def _collect_user_linyu_configs(self, owner_user_id: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         collected: Dict[str, Dict[str, Any]] = {}
         global_linyu = copy.deepcopy((config.adapters_config or {}).get("linyu", {}) or {})
+        global_account = str(global_linyu.get("account", "") or "").strip()
+        global_password = str(global_linyu.get("password", "") or "").strip()
+
+        if owner_user_id is None and global_linyu.get("enabled", False):
+            if global_account and global_password:
+                collected["global"] = global_linyu
 
         if owner_user_id is not None:
             user = await user_manager.get_user_by_id(int(owner_user_id))
@@ -210,6 +220,32 @@ class LinyuSessionManager:
             user_adapters = (overrides or {}).get("adapters", {}) or {}
             user_linyu = user_adapters.get("linyu")
             if not isinstance(user_linyu, dict):
+                continue
+
+            user_account = str(user_linyu.get("account", "") or "").strip()
+            user_password = str(user_linyu.get("password", "") or "").strip()
+            has_personal_credentials = bool(user_account and user_password)
+            uses_copied_global_credentials = (
+                has_personal_credentials
+                and user_account == global_account
+                and user_password == global_password
+            )
+            if uses_copied_global_credentials:
+                bound_account = str(getattr(user, "linyu_account", "") or "").strip()
+                bound_user_id = str(getattr(user, "linyu_user_id", "") or "").strip()
+                # Existing user configs are full copies of config.yaml. Treat a copied
+                # global Linyu login as "not personally configured", otherwise every
+                # bound user starts a duplicate session for the same AI account.
+                if user_account in {bound_account, bound_user_id}:
+                    print(
+                        "⚠️ 跳过用户级 Linyu 会话: "
+                        f"owner={user.id}, AI 登录账号与绑定身份相同 ({user_account})"
+                    )
+                else:
+                    print(
+                        "ℹ️ 跳过用户级 Linyu 会话: "
+                        f"owner={user.id}, 使用的是全局 Linyu 登录账号副本 ({user_account})"
+                    )
                 continue
 
             merged_linyu = config_merger.get_user_config(global_linyu, user_linyu, skip_empty=True)

@@ -53,6 +53,50 @@ async def test_collect_user_linyu_configs_filters_disabled_users(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_collect_linyu_configs_starts_global_session_and_skips_copied_user_credentials(monkeypatch):
+    manager = LinyuSessionManager(bot=object())
+
+    users = [
+        SimpleNamespace(id=1, linyu_user_id="uuid-1", linyu_account="user1"),
+    ]
+
+    monkeypatch.setattr("backend.adapters.linyu_manager.user_manager.list_users", AsyncMock(return_value=users))
+    monkeypatch.setattr(
+        "backend.adapters.linyu_manager.user_manager.get_user_config_dict",
+        AsyncMock(return_value={
+            "adapters": {
+                "linyu": {
+                    "enabled": True,
+                    "account": "global_ai",
+                    "password": "global_pwd",
+                    "auto_bind_first_user": True,
+                }
+            }
+        }),
+    )
+    monkeypatch.setattr(
+        "backend.adapters.linyu_manager.config._config",
+        {
+            "adapters": {
+                "linyu": {
+                    "enabled": True,
+                    "account": "global_ai",
+                    "password": "global_pwd",
+                    "http_host": "10.0.0.8",
+                    "http_port": 9200,
+                }
+            }
+        },
+        raising=False,
+    )
+
+    configs = await manager._collect_user_linyu_configs()
+
+    assert set(configs.keys()) == {"global"}
+    assert configs["global"]["account"] == "global_ai"
+
+
+@pytest.mark.asyncio
 async def test_collect_user_linyu_configs_inherits_global_server_and_prefers_bound_identity(monkeypatch):
     manager = LinyuSessionManager(bot=object())
 

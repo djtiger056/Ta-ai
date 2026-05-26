@@ -34,8 +34,16 @@ class DummyMemoryManager:
     async def get_mid_term_summaries(self, user_id, session_id=None, limit=100):
         return self.summaries
 
+    async def get_short_term_memories(self, user_id, session_id, limit=100):
+        return self.messages[-limit:]
+
     async def add_short_term_memory(self, user_id, session_id, message):
         self.written.append((user_id, session_id, message))
+        return True
+
+    async def batch_add_short_term_memories(self, user_id, session_id, messages):
+        for message in messages:
+            await self.add_short_term_memory(user_id, session_id, message)
         return True
 
 
@@ -71,6 +79,10 @@ def make_bot(preferences=None):
     bot._get_roleplay_memory_manager = get_roleplay_manager
     bot._get_user_llm_provider = lambda user_id: bot._provider
     bot._ensure_memory_manager_initialized = ensure_memory
+    bot._user_cache = SimpleNamespace(
+        get_chat_mode=lambda user_id: bot._preferences.get("chat_mode", "companion"),
+        get_roleplay_prompt=lambda user_id: "【情景演绎提示词】只维持剧情。",
+    )
     bot._get_session_history = lambda session_id, user_id="default": bot.session_histories.setdefault(session_id, [])
     bot._trim_conversation_history = lambda session_id, user_id="default": None
     bot.invalidate_user_cache = lambda user_id: None
@@ -156,7 +168,10 @@ async def test_chat_stream_mode_command_yields_confirmation_only():
 
     bot._get_user_config = get_user_config
     bot._refresh_provider = lambda *args, **kwargs: None
-    bot._user_cache = SimpleNamespace(get_chat_mode=lambda user_id: "companion")
+    bot._user_cache = SimpleNamespace(
+        get_chat_mode=lambda user_id: "companion",
+        get_roleplay_prompt=lambda user_id: "【情景演绎提示词】只维持剧情。",
+    )
 
     chunks = []
     async for chunk in Bot.chat_stream(bot, " /情景 ", user_id="u1", session_id="s1"):
@@ -165,3 +180,41 @@ async def test_chat_stream_mode_command_yields_confirmation_only():
     assert chunks == ["已切换到情景演绎模式。"]
     assert bot._preferences["chat_mode"] == "roleplay"
     assert bot._provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_roleplay_proactive_reply_uses_only_roleplay_prompt_and_short_mid_memory():
+    bot = make_bot({"chat_mode": "roleplay"})
+    bot._roleplay_manager.messages = [
+        {"message": {"role": "user", "content": "我们在废弃车站等雨停。"}},
+        {"message": {"role": "assistant", "content": "我把外套披到你肩上。"}},
+    ]
+    bot._roleplay_manager.summaries = [
+        {"summary": "用户和 AI 在雨夜车站相互照顾，气氛安静。"}
+    ]
+
+    async def get_user_config(user_id):
+        return {}
+
+    bot._get_user_config = get_user_config
+    bot._refresh_provider = lambda *args, **kwargs: None
+    bot._context_builder = SimpleNamespace(
+        build=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不应构建普通上下文"))
+    )
+
+    response = await Bot.generate_proactive_reply(
+        bot,
+        "对方昵称：测试用户\n[daily_habits] 当前正在上课，请按作息表回复。",
+        user_id="u1",
+    )
+
+    assert response == "本次情景里，用户和 AI 完成了一段重要互动。"
+    assert bot._provider.calls
+    payload_text = "\n".join(message["content"] for message in bot._provider.calls[-1])
+    assert "【情景演绎提示词】" in payload_text
+    assert "废弃车站" in payload_text
+    assert "雨夜车站相互照顾" in payload_text
+    assert "daily_habits" not in payload_text
+    assert "作息表" not in payload_text
+    assert "测试用户" not in payload_text
+    assert "上课" not in payload_text

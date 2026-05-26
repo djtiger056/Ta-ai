@@ -119,6 +119,7 @@ class LinyuAdapter:
         )
 
         self.follow_up_waiters: Dict[str, asyncio.Future] = {}
+        self._bound_bot_user_ids: Dict[str, str] = {}
         self._emote_send_cache: Dict[str, Dict[str, float]] = {}
         # 消息去重缓存
         self._processed_messages: Dict[str, float] = {}
@@ -351,6 +352,10 @@ class LinyuAdapter:
         # 尝试将 Linyu userId 与已绑定账号名的用户关联
         await self._try_resolve_linyu_binding(user_id)
         bound_user = await self._get_bound_linyu_user(user_id)
+        if bound_user and getattr(bound_user, "id", None) is not None:
+            if not hasattr(self, "_bound_bot_user_ids"):
+                self._bound_bot_user_ids = {}
+            self._bound_bot_user_ids[user_id] = str(bound_user.id)
         self._grant_bound_user_whitelist_access(user_id, bound_user)
 
         # 获取消息ID用于去重
@@ -1005,7 +1010,10 @@ class LinyuAdapter:
     def _get_bot_user_id(self, linyu_user_id: str) -> str:
         """返回该 Linyu 会话应使用的系统内用户 ID。"""
         owner_user_id = str(getattr(self, "owner_user_id", "") or "").strip()
-        return owner_user_id or str(linyu_user_id)
+        if owner_user_id:
+            return owner_user_id
+        bound_user_id = self._bound_bot_user_ids.get(str(linyu_user_id))
+        return bound_user_id or str(linyu_user_id)
 
     def _get_bot_session_id(self, linyu_user_id: str) -> str:
         """为该 Linyu 对话生成稳定的 Bot 会话 ID。"""
@@ -2009,7 +2017,7 @@ class LinyuAdapter:
                 return
 
             # 查找是否有用户绑定了这个账号名
-            user_by_account = await user_manager.get_user_by_linyu_id(account)
+            user_by_account = await user_manager.get_user_by_linyu_account(account)
             if user_by_account:
                 # 将账号名更新为真实的 userId，同时保留账号名用于显示
                 await user_manager.update_user(
@@ -2043,9 +2051,19 @@ class LinyuAdapter:
             and not self._has_explicit_target
         )
 
+    def _should_allow_bound_user_access(self, bound_user: Optional[Any]) -> bool:
+        return bool(
+            bound_user
+            and not self.owner_user_id
+            and not self._has_explicit_target
+        )
+
     def _grant_bound_user_whitelist_access(self, user_id: str, bound_user: Optional[Any]):
         if (
-            not self._should_allow_bound_user_target_override(bound_user)
+            not (
+                self._should_allow_bound_user_target_override(bound_user)
+                or self._should_allow_bound_user_access(bound_user)
+            )
             or not self.access_control_enabled
             or self.access_control_mode != "whitelist"
         ):

@@ -123,9 +123,16 @@ class UserManager:
             return result.scalar_one_or_none()
 
     async def get_user_by_linyu_id(self, linyu_user_id: str) -> Optional[User]:
-        """根据Linyu用户ID或账号名获取用户"""
+        """根据Linyu用户ID获取用户"""
         async with self.get_session() as session:
             stmt = select(User).where(User.linyu_user_id == linyu_user_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def get_user_by_linyu_account(self, linyu_account: str) -> Optional[User]:
+        """根据Linyu账号名获取用户"""
+        async with self.get_session() as session:
+            stmt = select(User).where(User.linyu_account == linyu_account)
             result = await session.execute(stmt)
             return result.scalar_one_or_none()
 

@@ -65,6 +65,7 @@ async def _get_authenticated_user(token: str) -> Any:
 
 def _get_accessible_memory_entries(user: Any) -> List[Dict[str, str]]:
     entries: List[Dict[str, str]] = []
+    project_user_id = str(getattr(user, "id", "") or "").strip()
 
     qq_user_id = str(getattr(user, "qq_user_id", None) or "").strip()
     if qq_user_id:
@@ -74,23 +75,35 @@ def _get_accessible_memory_entries(user: Any) -> List[Dict[str, str]]:
             "display_name": display_name,
             "selector_key": display_name,
             "channel": "qq",
+            "default_session_id": qq_user_id,
+            "remote_user_id": qq_user_id,
+            "project_user_id": project_user_id,
         })
 
     linyu_user_id = str(getattr(user, "linyu_user_id", None) or "").strip()
     if linyu_user_id:
         display_name = _build_memory_identity_display(user, "linyu")
         entries.append({
-            "user_id": linyu_user_id,
-            "display_name": display_name,
+            "user_id": project_user_id or linyu_user_id,
+            "display_name": f"{display_name} | 项目ID:{project_user_id}" if project_user_id else display_name,
             "selector_key": display_name,
             "channel": "linyu",
+            "default_session_id": f"linyu_private:{linyu_user_id}",
+            "remote_user_id": linyu_user_id,
+            "project_user_id": project_user_id,
         })
 
     return entries
 
 
 def _get_accessible_memory_user_ids(user: Any) -> set[str]:
-    return {entry["user_id"] for entry in _get_accessible_memory_entries(user)}
+    allowed_ids: set[str] = set()
+    for entry in _get_accessible_memory_entries(user):
+        for key in ("user_id", "remote_user_id", "project_user_id"):
+            value = str(entry.get(key) or "").strip()
+            if value:
+                allowed_ids.add(value)
+    return allowed_ids
 
 
 def _ensure_user_id_access(user: Any, user_id: str, field_name: str = "user_id") -> str:
@@ -104,7 +117,19 @@ def _ensure_user_id_access(user: Any, user_id: str, field_name: str = "user_id")
 def _ensure_session_access(user: Any, session_id: Optional[str]) -> Optional[str]:
     if session_id is None:
         return None
-    return _ensure_user_id_access(user, session_id, "session_id")
+    requested = str(session_id or "").strip()
+    if not requested:
+        return None
+
+    allowed_session_ids = {value for value in _get_accessible_memory_user_ids(user) if value}
+    for entry in _get_accessible_memory_entries(user):
+        default_session_id = str(entry.get("default_session_id") or "").strip()
+        if default_session_id:
+            allowed_session_ids.add(default_session_id)
+
+    if requested not in allowed_session_ids:
+        raise HTTPException(status_code=403, detail="无权访问该session_id对应的记忆")
+    return requested
 
 
 async def _ensure_memory_owner_access(manager: Any, user: Any, memory_id: str) -> None:
