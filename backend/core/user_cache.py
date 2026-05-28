@@ -96,7 +96,7 @@ class UserResourceCache:
         return user_config
 
     async def resolve_user(self, user_id: str):
-        """按 Web 数字 ID、QQ ID、Linyu ID 解析真实用户。"""
+        """按 Web 数字 ID、QQ ID、Linyu ID、username 解析真实用户。"""
         user = None
         user_id_str = str(user_id)
 
@@ -108,6 +108,10 @@ class UserResourceCache:
 
         if user is None:
             user = await user_manager.get_user_by_linyu_id(user_id_str)
+
+        # 数字 ID 和 QQ/Linyu 都没找到，尝试按 username 精确匹配
+        if user is None:
+            user = await user_manager.get_user_by_username(user_id_str)
 
         if user is None and not user_id_str.isdigit():
             is_uuid = len(user_id_str) == 36 and user_id_str.count("-") == 4

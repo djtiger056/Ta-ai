@@ -11,6 +11,53 @@ from backend.adapters.linyu_manager import get_linyu_session_manager
 router = APIRouter(prefix="/api", tags=["user_config"])
 
 
+async def _get_current_user_from_token(token: str):
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
+
+    user_info = auth_manager.get_user_from_token(token)
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无效的令牌"
+        )
+
+    user = await user_manager.get_user_by_id(user_info["user_id"])
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在"
+        )
+
+    return user
+
+
+def _user_runtime_ids(user) -> set[str]:
+    ids = {str(user.id)}
+    for attr in ("qq_user_id", "linyu_user_id"):
+        value = str(getattr(user, attr, None) or "").strip()
+        if value:
+            ids.add(value)
+    return ids
+
+
+def _invalidate_runtime_user(user) -> None:
+    """清理该账号所有可作为运行时 user_id 的缓存键。"""
+    bot = get_bot()
+    for runtime_id in _user_runtime_ids(user):
+        try:
+            bot.invalidate_user_cache(runtime_id)
+        except Exception:
+            pass
+
+
+def _refresh_linyu_runtime_user(user) -> None:
+    manager = get_linyu_session_manager()
+    if not manager:
+        return
+    manager.request_refresh_user(str(user.id))
+
+
 class UserConfigResponse(BaseModel):
     """用户配置响应模型"""
     system_prompt: Optional[str] = None
@@ -42,17 +89,8 @@ class UpdateUserConfigRequest(BaseModel):
 @router.get("/user/config", response_model=UserConfigResponse)
 async def get_user_config(token: str = Depends(get_access_token)):
     """获取用户配置"""
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
-    user_info = auth_manager.get_user_from_token(token)
-    
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的令牌"
-        )
-    
-    config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
+    user = await _get_current_user_from_token(token)
+    config_dict = await user_manager.get_user_config_dict(user.id)
     
     return UserConfigResponse(**config_dict)
 
@@ -60,15 +98,7 @@ async def get_user_config(token: str = Depends(get_access_token)):
 @router.put("/user/config", response_model=UserConfigResponse)
 async def update_user_config(request: UpdateUserConfigRequest, token: str = Depends(get_access_token)):
     """更新用户配置"""
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
-    user_info = auth_manager.get_user_from_token(token)
-    
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的令牌"
-        )
+    user = await _get_current_user_from_token(token)
     
     # 构建配置数据
     config_data = {}
@@ -94,7 +124,7 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
         config_data['preferences'] = request.preferences
     
     # 更新配置
-    success = await user_manager.update_user_config(user_info['user_id'], config_data)
+    success = await user_manager.update_user_config(user.id, config_data)
     
     if not success:
         raise HTTPException(
@@ -102,16 +132,9 @@ async def update_user_config(request: UpdateUserConfigRequest, token: str = Depe
             detail="配置更新失败"
         )
     
-    # 返回更新后的配置
-    get_bot().invalidate_user_cache(str(user_info['user_id']))
-    config_dict = await user_manager.get_user_config_dict(user_info['user_id'])
-    try:
-        get_bot().invalidate_user_cache(str(user_info['user_id']))
-    except Exception:
-        pass
-    manager = get_linyu_session_manager()
-    if manager:
-        manager.request_refresh_user(str(user_info['user_id']))
+    _invalidate_runtime_user(user)
+    config_dict = await user_manager.get_user_config_dict(user.id)
+    _refresh_linyu_runtime_user(user)
     
     return UserConfigResponse(**config_dict)
 
@@ -126,15 +149,7 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
                      prompt_enhancer, emotes, preferences
                      如果不指定，则重置所有配置
     """
-    if not token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少令牌")
-    user_info = auth_manager.get_user_from_token(token)
-    
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="无效的令牌"
-        )
+    user = await _get_current_user_from_token(token)
     
     # 构建重置数据
     config_data = {}
@@ -188,7 +203,7 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
         }
     
     # 更新配置
-    success = await user_manager.update_user_config(user_info['user_id'], config_data)
+    success = await user_manager.update_user_config(user.id, config_data)
     
     if not success:
         raise HTTPException(
@@ -196,14 +211,8 @@ async def reset_user_config(token: str = Depends(get_access_token), config_type:
             detail="配置重置失败"
         )
 
-    try:
-        get_bot().invalidate_user_cache(str(user_info['user_id']))
-    except Exception:
-        pass
-
-    manager = get_linyu_session_manager()
-    if manager:
-        manager.request_refresh_user(str(user_info['user_id']))
+    _invalidate_runtime_user(user)
+    _refresh_linyu_runtime_user(user)
     
     return {"message": "配置重置成功"}
 

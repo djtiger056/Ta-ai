@@ -188,6 +188,25 @@ const MemoryPage: React.FC = () => {
   const [externalContextMaxTokens, setExternalContextMaxTokens] = useState<number>(500)
   const [externalContextTopics, setExternalContextTopics] = useState<string>('')
 
+  const getMemoryOptionValue = (info: MemoryUserInfo): string =>
+    info.selector_key || `${info.channel || 'memory'}:${info.user_id}:${info.default_session_id || ''}`
+
+  const memorySelectOptions = memoryUserOptions.map(info => ({
+    label: info.display_name || info.user_id,
+    value: getMemoryOptionValue(info),
+  }))
+  const memoryUserIdOptions = Array.from(
+    new Map(
+      memoryUserOptions.map(info => [
+        info.user_id,
+        {
+          label: info.display_name || info.user_id,
+          value: info.user_id,
+        },
+      ])
+    ).values()
+  )
+
   const [saveStatus, setSaveStatus] = useState<{
     status: 'idle' | 'saving' | 'success' | 'warning' | 'error'
     message?: string
@@ -201,8 +220,9 @@ const MemoryPage: React.FC = () => {
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null)
   const savedConfigRef = useRef<MemoryConfig | null>(null)
 
-  const selectedMemoryUser = memoryUserOptions.find((info) => info.user_id === selectedUserId)
-  const selectedSessionId = selectedMemoryUser?.default_session_id || selectedUserId
+  const selectedMemoryUser = memoryUserOptions.find((info) => getMemoryOptionValue(info) === selectedUserId)
+  const selectedMemoryUserId = selectedMemoryUser?.user_id || selectedUserId
+  const selectedSessionId = selectedMemoryUser?.default_session_id || selectedMemoryUserId
 
   // 配置标签页
   useEffect(() => {
@@ -227,8 +247,9 @@ const MemoryPage: React.FC = () => {
       const infoList = Array.isArray(data.user_info) ? data.user_info : []
       setMemoryUserOptions(infoList)
       setSelectedUserId((prev) => {
-        if (prev && ids.includes(prev)) return prev
-        return ids[0] || ''
+        const values = infoList.map(getMemoryOptionValue)
+        if (prev && values.includes(prev)) return prev
+        return values[0] || ids[0] || ''
       })
     } catch (error) {
       console.error('加载记忆身份列表失败:', error)
@@ -241,9 +262,9 @@ const MemoryPage: React.FC = () => {
 
   useEffect(() => {
     if (!selectedUserId) return
-    searchForm.setFieldsValue({ user_id: selectedUserId })
-    addMemoryForm.setFieldsValue({ user_id: selectedUserId })
-  }, [selectedUserId, searchForm, addMemoryForm])
+    searchForm.setFieldsValue({ user_id: selectedMemoryUserId })
+    addMemoryForm.setFieldsValue({ user_id: selectedMemoryUserId })
+  }, [selectedUserId, selectedMemoryUserId, searchForm, addMemoryForm])
 
   useEffect(() => {
     if (activeTab === 'config') {
@@ -521,7 +542,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const memories = await memoryApi.getShortTermMemories(selectedUserId, selectedSessionId, 20)
+      const memories = await memoryApi.getShortTermMemories(selectedMemoryUserId, selectedSessionId, 20)
       setShortTermMemories(memories || [])
     } catch (error) {
       console.error('加载短期记忆失败:', error)
@@ -536,7 +557,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const memories = await memoryApi.getPendingMemories(selectedUserId, selectedSessionId, 200)
+      const memories = await memoryApi.getPendingMemories(selectedMemoryUserId, selectedSessionId, 200)
       setPendingMemories(memories || [])
     } catch (error) {
       console.error('加载待处理区失败:', error)
@@ -551,7 +572,7 @@ const MemoryPage: React.FC = () => {
     }
     try {
       setLoading(true)
-      const result = await memoryApi.summarizePendingMemories(selectedUserId, selectedSessionId)
+      const result = await memoryApi.summarizePendingMemories(selectedMemoryUserId, selectedSessionId)
       if (result?.ok) {
         if (result?.processed) {
           const processedBatches = Number(result?.processed_batches || 0)
@@ -597,7 +618,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const summaries = await memoryApi.getMidTermMemories(selectedUserId, selectedSessionId, 50)
+      const summaries = await memoryApi.getMidTermMemories(selectedMemoryUserId, selectedSessionId, 50)
       setMidTermMemories(summaries || [])
     } catch (error) {
       console.error('加载中期记忆失败:', error)
@@ -612,7 +633,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      const memories = await memoryApi.getLongTermMemories(selectedUserId, 50)
+      const memories = await memoryApi.getLongTermMemories(selectedMemoryUserId, 50)
       setLongTermMemories(memories || [])
     } catch (error) {
       console.error('加载长期记忆失败:', error)
@@ -641,7 +662,7 @@ const MemoryPage: React.FC = () => {
     }
     try {
       setExternalLoading(true)
-      const data = await memoryApi.getExternalMemoryProfiles(selectedUserId)
+      const data = await memoryApi.getExternalMemoryProfiles(selectedMemoryUserId)
       setExternalProfiles(data || [])
     } catch (error) {
       console.error('加载外部画像失败:', error)
@@ -659,7 +680,7 @@ const MemoryPage: React.FC = () => {
     try {
       setExternalLoading(true)
       const data = await memoryApi.getExternalMemoryEvents(
-        selectedUserId,
+        selectedMemoryUserId,
         externalLimit,
         externalQuery || undefined
       )
@@ -684,7 +705,7 @@ const MemoryPage: React.FC = () => {
         .map(item => item.trim())
         .filter(item => item.length > 0)
       const data = await memoryApi.getExternalMemoryContext(
-        selectedUserId,
+        selectedMemoryUserId,
         externalContextMaxTokens,
         topics.length > 0 ? topics : undefined
       )
@@ -706,7 +727,7 @@ const MemoryPage: React.FC = () => {
       setSearchLoading(true)
       const values = await searchForm.validateFields()
       const results = await memoryApi.searchLongTermMemories(
-        values.user_id || selectedUserId,
+        values.user_id || selectedMemoryUserId,
         values.query,
         values.top_k || 5,
         values.score_threshold || 0.5
@@ -735,7 +756,7 @@ const MemoryPage: React.FC = () => {
     try {
       const values = await addMemoryForm.validateFields()
       await memoryApi.addLongTermMemory(
-        values.user_id || selectedUserId,
+        values.user_id || selectedMemoryUserId,
         values.content,
         values.importance || 0.5,
         values.metadata ? JSON.parse(values.metadata) : {}
@@ -778,7 +799,7 @@ const MemoryPage: React.FC = () => {
       return
     }
     try {
-      await memoryApi.clearMemories(selectedUserId, selectedSessionId)
+      await memoryApi.clearMemories(selectedMemoryUserId, selectedSessionId)
       message.success('记忆清除成功')
       setShortTermMemories([])
       setPendingMemories([])
@@ -1061,7 +1082,7 @@ const MemoryPage: React.FC = () => {
             style={{ width: 420 }}
             value={selectedUserId}
             onChange={setSelectedUserId}
-            options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+            options={memorySelectOptions}
             placeholder="选择记忆身份"
             showSearch
             filterOption={(input, option) =>
@@ -1878,7 +1899,7 @@ const MemoryPage: React.FC = () => {
                 <Form form={searchForm} layout="vertical">
                   <Form.Item label="记忆身份" name="user_id" initialValue={selectedUserId}>
                     <Select
-                      options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+                      options={memoryUserIdOptions}
                       placeholder="选择记忆身份"
                       showSearch
                       filterOption={(input, option) =>
@@ -1932,7 +1953,7 @@ const MemoryPage: React.FC = () => {
                 <Form form={addMemoryForm} layout="vertical">
                   <Form.Item label="记忆身份" name="user_id" initialValue={selectedUserId}>
                     <Select
-                      options={memoryUserOptions.map(info => ({ label: info.display_name || info.user_id, value: info.user_id }))}
+                      options={memoryUserIdOptions}
                       placeholder="选择记忆身份"
                       showSearch
                       filterOption={(input, option) =>

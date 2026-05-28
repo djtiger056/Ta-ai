@@ -66,6 +66,17 @@ async def _get_authenticated_user(token: str) -> Any:
 def _get_accessible_memory_entries(user: Any) -> List[Dict[str, str]]:
     entries: List[Dict[str, str]] = []
     project_user_id = str(getattr(user, "id", "") or "").strip()
+    if project_user_id:
+        username = _get_project_username(user)
+        entries.append({
+            "user_id": project_user_id,
+            "display_name": f"{username} | Web:{project_user_id}",
+            "selector_key": f"{username} | Web",
+            "channel": "web",
+            "default_session_id": project_user_id,
+            "remote_user_id": "",
+            "project_user_id": project_user_id,
+        })
 
     qq_user_id = str(getattr(user, "qq_user_id", None) or "").strip()
     if qq_user_id:
@@ -266,7 +277,7 @@ async def get_memory_users(token: str = Depends(get_access_token)):
     try:
         user = await _get_authenticated_user(token)
         user_info_list = _get_accessible_memory_entries(user)
-        user_ids = [entry["user_id"] for entry in user_info_list]
+        user_ids = list(dict.fromkeys(entry["user_id"] for entry in user_info_list))
         return {"user_ids": user_ids, "user_info": user_info_list}
     except HTTPException:
         raise

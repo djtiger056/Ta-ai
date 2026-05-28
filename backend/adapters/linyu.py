@@ -37,7 +37,8 @@ class LinyuAdapter:
 
     def __init__(self, bot: Bot, linyu_config: Optional[Dict[str, Any]] = None, *, owner_user_id: Optional[str] = None):
         self.bot = bot
-        self.owner_user_id = str(owner_user_id) if owner_user_id is not None else None
+        owner_value = str(owner_user_id).strip() if owner_user_id is not None else ""
+        self.owner_user_id = owner_value if owner_value and owner_value != "global" else None
         self.linyu_config = copy.deepcopy(linyu_config if linyu_config is not None else config.adapters_config.get("linyu", {}))
 
         # 连接配置
@@ -533,6 +534,7 @@ class LinyuAdapter:
         try:
             bot_user_id = self._get_bot_user_id(user_id)
             session_id = self._get_bot_session_id(user_id)
+            print(f"🔎 Linyu 运行身份: sender={user_id}, bot_user_id={bot_user_id}, session_id={session_id}")
             proactive_api.record_user_activity("linyu_private", user_id, user_id, text_content)
             roleplay_mode = await self._is_roleplay_mode(bot_user_id)
             voice_only = self.bot.is_voice_only_mode(bot_user_id)
@@ -1010,7 +1012,7 @@ class LinyuAdapter:
     def _get_bot_user_id(self, linyu_user_id: str) -> str:
         """返回该 Linyu 会话应使用的系统内用户 ID。"""
         owner_user_id = str(getattr(self, "owner_user_id", "") or "").strip()
-        if owner_user_id:
+        if owner_user_id and owner_user_id != "global":
             return owner_user_id
         bound_user_id = self._bound_bot_user_ids.get(str(linyu_user_id))
         return bound_user_id or str(linyu_user_id)
@@ -2052,9 +2054,10 @@ class LinyuAdapter:
         )
 
     def _should_allow_bound_user_access(self, bound_user: Optional[Any]) -> bool:
+        owner_user_id = str(getattr(self, "owner_user_id", "") or "").strip()
         return bool(
             bound_user
-            and not self.owner_user_id
+            and (not owner_user_id or owner_user_id == "global")
             and not self._has_explicit_target
         )
 

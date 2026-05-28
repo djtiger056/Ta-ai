@@ -120,10 +120,25 @@ async def generate_image(
 
 
 @router.post("/test-connection")
-async def test_connection(bot: Bot = Depends(get_bot)):
+async def test_connection(
+    bot: Bot = Depends(get_bot),
+    token: str = Depends(get_access_token),
+):
     """测试图像生成连接"""
     try:
-        success = await bot.test_image_gen_connection()
+        # 非管理员使用用户级配置测试；管理员用全局配置
+        user_id = None
+        if token:
+            user_info = auth_manager.get_user_from_token(token)
+            if user_info:
+                current_user_id = user_info.get("user_id") or user_info.get("id")
+                if current_user_id:
+                    from backend.user import user_manager
+                    user = await user_manager.get_user_by_id(int(current_user_id))
+                    if not user or not getattr(user, "is_admin", 0):
+                        user_id = str(current_user_id)
+
+        success = await bot.test_image_gen_connection(user_id=user_id or None)
         return {"success": success, "message": "连接成功" if success else "连接失败"}
     except Exception as e:
         return {"success": False, "message": f"连接测试失败：{str(e)}"}

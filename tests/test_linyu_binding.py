@@ -168,3 +168,52 @@ async def test_global_linyu_session_maps_bound_sender_to_project_user(monkeypatc
         "d8ba2701-5c71-43c1-809c-d1bbfc57b3f3",
         "hello",
     )
+
+
+@pytest.mark.asyncio
+async def test_global_owner_id_does_not_hide_bound_project_user(monkeypatch):
+    adapter = LinyuAdapter.__new__(LinyuAdapter)
+    adapter.owner_user_id = "global"
+    adapter.user_id = "ai-user"
+    adapter.target_user_id = ""
+    adapter.target_user_account = ""
+    adapter.auto_bind_first_user = False
+    adapter._has_explicit_target = False
+    adapter.access_control_enabled = True
+    adapter.access_control_mode = "whitelist"
+    adapter.access_whitelist = set()
+    adapter.access_deny_message = "denied"
+    adapter._bound_bot_user_ids = {}
+
+    adapter._try_resolve_linyu_binding = AsyncMock()
+    adapter._get_bound_linyu_user = AsyncMock(return_value=SimpleNamespace(id=18))
+    adapter._is_message_processed = lambda msg_id: False
+    adapter._deliver_follow_up_message = lambda conversation_key, message_text: False
+    adapter._get_conversation_key = lambda target_id, is_group=False, user_id=None: f"linyu_user_{target_id}"
+    adapter._handle_text_message = AsyncMock()
+    adapter.send_private_message = AsyncMock()
+    adapter._mark_read = AsyncMock()
+
+    def fake_create_task(coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr("backend.adapters.linyu.asyncio.create_task", fake_create_task)
+
+    await adapter._handle_private_message(
+        {
+            "fromId": "d8ba2701-5c71-43c1-809c-d1bbfc57b3f3",
+            "id": "msg-3",
+            "msgContent": {
+                "type": "text",
+                "content": "hello",
+            },
+        }
+    )
+
+    assert adapter._get_bot_user_id("d8ba2701-5c71-43c1-809c-d1bbfc57b3f3") == "18"
+    assert "d8ba2701-5c71-43c1-809c-d1bbfc57b3f3" in adapter.access_whitelist
+    adapter._handle_text_message.assert_awaited_once_with(
+        "d8ba2701-5c71-43c1-809c-d1bbfc57b3f3",
+        "hello",
+    )

@@ -2120,11 +2120,15 @@ class Bot:
             return False
         return await video_mgr.test_connection()
     
-    async def test_image_gen_connection(self) -> bool:
-        """测试图像生成连接"""
-        if not self.image_gen_manager:
+    async def test_image_gen_connection(self, user_id: Optional[str] = None) -> bool:
+        """测试图像生成连接。传入 user_id 时使用该用户的覆盖配置。"""
+        image_mgr = self.image_gen_manager
+        if user_id:
+            await self._get_user_config(user_id)
+            image_mgr = self._get_user_image_gen_manager(user_id) or self.image_gen_manager
+        if not image_mgr:
             return False
-        return await self.image_gen_manager.test_connection()
+        return await image_mgr.test_connection()
     
     def should_recognize_image(self, message_segments: list) -> bool:
         """检查是否应该识别图片

@@ -28,17 +28,17 @@ class OpenAIProvider(BaseLLMProvider):
         }
 
         raw_api_base = (
-            provider_config.get('api_base')
-            or self.config.get('api_base')
+            self.config.get('api_base')
+            or provider_config.get('api_base')
             or default_api_bases.get(provider_name, 'https://api.openai.com/v1')
         )
         self.api_base = self._normalize_api_base(raw_api_base)
-        self.api_key = provider_config.get('api_key') or self.config.get('api_key', '')
-        self.model = provider_config.get('model') or self.config.get('model', 'gpt-3.5-turbo')
-        self.temperature = provider_config.get('temperature') or self.config.get('temperature', 0.7)
-        self.max_tokens = provider_config.get('max_tokens') or self.config.get('max_tokens', 2000)
-        self.presence_penalty = provider_config.get('presence_penalty', self.config.get('presence_penalty', 0))
-        self.frequency_penalty = provider_config.get('frequency_penalty', self.config.get('frequency_penalty', 0))
+        self.api_key = self.config.get('api_key') or provider_config.get('api_key') or ''
+        self.model = self.config.get('model') or provider_config.get('model') or 'gpt-3.5-turbo'
+        self.temperature = self.config.get('temperature', provider_config.get('temperature', 0.7))
+        self.max_tokens = self.config.get('max_tokens', provider_config.get('max_tokens', 2000))
+        self.presence_penalty = self.config.get('presence_penalty', provider_config.get('presence_penalty', 0))
+        self.frequency_penalty = self.config.get('frequency_penalty', provider_config.get('frequency_penalty', 0))
         
         # 超时配置
         timeout_config = self.config.get('timeout', {})
