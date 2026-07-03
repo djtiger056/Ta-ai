@@ -13,13 +13,15 @@
 ### 1.基础配置
  <img width="1271" height="617" alt="屏幕截图 2026-07-03 122234" src="https://github.com/user-attachments/assets/48841ce1-e140-4ae2-814f-a35eea765a4c" />
     高度自定义化，配置出独一无二的ta
+    
 ### 2.记忆系统配置
 <img width="1257" height="616" alt="屏幕截图 2026-07-03 122307" src="https://github.com/user-attachments/assets/dc15f0e3-b030-422b-8740-d628e1b12245" />
- 
     可修改记忆配置，支持增删改查记忆系统
+    
 ### 3.情绪系统
      
 <img width="1262" height="620" alt="屏幕截图 2026-07-03 122323" src="https://github.com/user-attachments/assets/c3f6831a-19eb-45b3-b1cc-061258576ba0" />
+    ai伴侣有其自己的情绪系统，增强聊天情感
 
 
 ---
